@@ -22,5 +22,15 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </dict>
 </plist>
 PLIST
-codesign -s - --force "$APP"
-echo "Built $APP"
+# Подпись сертификатом Apple Development (стабильная identity: TCC-разрешения
+# — Accessibility и т.п. — сохраняются между пересборками, т.к. designated
+# requirement привязан к team ID + bundle id, а не к хэшу бинарника).
+# Переопределяется через CODESIGN_IDENTITY; ad-hoc ("-") как запасной вариант.
+IDENTITY="${CODESIGN_IDENTITY:-Apple Development: Aleksandar Radoslavov (NJZL3R3488)}"
+if security find-identity -v -p codesigning | grep -qF "$IDENTITY"; then
+    codesign -s "$IDENTITY" --force --options runtime "$APP"
+    echo "Built $APP (signed: $IDENTITY)"
+else
+    codesign -s - --force "$APP"
+    echo "Built $APP (ad-hoc — '$IDENTITY' not found in keychain)"
+fi
