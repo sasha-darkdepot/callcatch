@@ -22,16 +22,27 @@ enum Log {
         if debugEnabled { write(message()) }
     }
 
+    // Запись сериализуется: лог пишется и с main, и с фонового потока AX-стопа,
+    // два FileHandle к одному offset иначе затирают друг друга (потеря строк).
+    private static let queue = DispatchQueue(label: "dev.sasha.callcatch.log")
+
     private static func write(_ message: String) {
         NSLog("%@", message)
         let line = "\(formatter.string(from: Date())) \(message)\n"
         guard let data = line.data(using: .utf8) else { return }
-        if let h = try? FileHandle(forWritingTo: url) {
-            defer { try? h.close() }
-            _ = try? h.seekToEnd()
-            try? h.write(contentsOf: data)
-        } else {
-            try? data.write(to: url)
+        queue.async {
+            let fm = FileManager.default
+            if !fm.fileExists(atPath: url.path) {
+                // 0600: лог с метаданными звонков не должен быть world-readable.
+                fm.createFile(atPath: url.path, contents: nil, attributes: [.posixPermissions: 0o600])
+            }
+            if let h = try? FileHandle(forWritingTo: url) {
+                defer { try? h.close() }
+                _ = try? h.seekToEnd()
+                try? h.write(contentsOf: data)
+            } else {
+                try? data.write(to: url)
+            }
         }
     }
 }

@@ -10,8 +10,9 @@ struct LogCheckpoint {
     let offset: UInt64
 }
 
-/// Checkpoint-чтение лога Plaud: только строки, появившиеся после checkpoint'а,
-/// считаются результатом текущей попытки старта (см. спеку — корреляция лога с попыткой).
+/// Checkpoint-чтение лога Plaud: только строки после checkpoint считаются
+/// результатом текущей попытки. Устойчив к ротации/обрезке файла, полуночному
+/// перекату даты и битым байтам (см. ниже).
 final class PlaudLogTail {
     private let logsDirectory: URL
     private let dateProvider: () -> Date
@@ -38,47 +39,57 @@ final class PlaudLogTail {
         return LogCheckpoint(fileURL: url, offset: size)
     }
 
-    /// Полночь/ротация: если сегодняшний файл отличается от checkpoint'ного — читает его с нуля тоже.
-    func poll(since cp: LogCheckpoint) -> StartOutcome? {
+    /// Текст после checkpoint (+ сегодняшний файл с нуля при полуночном перекате).
+    private func textSince(_ cp: LogCheckpoint) -> String {
         var chunks: [String] = [read(url: cp.fileURL, from: cp.offset)]
         let today = todayLogURL()
-        if today != cp.fileURL {
-            chunks.append(read(url: today, from: 0))
-        }
-        let text = chunks.joined(separator: "\n")
+        if today != cp.fileURL { chunks.append(read(url: today, from: 0)) }
+        return chunks.joined(separator: "\n")
+    }
+
+    func poll(since cp: LogCheckpoint) -> StartOutcome? {
+        let text = textSince(cp)
         // Успех приоритетнее отказа: отказ мог быть от ранней попытки до успешного ретрая.
-        if let m = firstMatch(#"startRecording by scene success[^\n]*?recordingId=(\S+)"#, in: text) {
-            return .success(recordingId: m)
+        // recordingId опционален — Plaud может не положить его на ту же строку.
+        if text.contains("startRecording by scene success") {
+            let rid = firstMatch(#"startRecording by scene success[^\n]*?recordingId=(\S+)"#, in: text) ?? ""
+            return .success(recordingId: rid)
         }
-        if let m = firstMatch(#"recording_start_rejected[^\n]*?reason=(\S+)"#, in: text) {
-            return .rejected(reason: m)
-        }
+        // Среди отказов фатальный (reason != not_available) важнее раннего not_available,
+        // иначе ранний not_available маскирует поздний фатальный до самого таймаута.
+        let reasons = allMatches(#"recording_start_rejected[^\n]*?reason=(\S+)"#, in: text)
+        if let fatal = reasons.first(where: { $0 != "not_available" }) { return .rejected(reason: fatal) }
+        if let first = reasons.first { return .rejected(reason: first) }
         return nil
     }
 
     /// Появилась ли строка с подстрокой после checkpoint (для детекта внешнего стопа).
     func containsLine(_ needle: String, since cp: LogCheckpoint) -> Bool {
-        var chunks: [String] = [read(url: cp.fileURL, from: cp.offset)]
-        let today = todayLogURL()
-        if today != cp.fileURL {
-            chunks.append(read(url: today, from: 0))
-        }
-        return chunks.joined(separator: "\n").contains(needle)
+        textSince(cp).contains(needle)
     }
 
     private func read(url: URL, from offset: UInt64) -> String {
         guard let h = try? FileHandle(forReadingFrom: url) else { return "" }
         defer { try? h.close() }
-        guard (try? h.seek(toOffset: offset)) != nil else { return "" }
-        guard let data = try? h.readToEnd(), let s = String(data: data, encoding: .utf8) else { return "" }
-        return s
+        // Ротация/обрезка: если файл усечён (offset > размера), электрон-лог
+        // переименовал/обнулил его — читаем с начала, иначе seek за EOF даёт "".
+        let size = (try? h.seekToEnd()) ?? 0
+        let start = offset > size ? 0 : offset
+        guard (try? h.seek(toOffset: start)) != nil else { return "" }
+        guard let data = try? h.readToEnd() else { return "" }
+        // Lossy-декод: один битый/оборванный байт не должен ронять весь буфер в "".
+        return String(decoding: data, as: UTF8.self)
     }
 
     private func firstMatch(_ pattern: String, in text: String) -> String? {
-        let re = try! NSRegularExpression(pattern: pattern)
+        allMatches(pattern, in: text).first
+    }
+
+    private func allMatches(_ pattern: String, in text: String) -> [String] {
+        guard let re = try? NSRegularExpression(pattern: pattern) else { return [] }
         let ns = text as NSString
-        guard let m = re.firstMatch(in: text, range: NSRange(location: 0, length: ns.length)),
-              m.numberOfRanges > 1, let r = Range(m.range(at: 1), in: text) else { return nil }
-        return String(text[r])
+        return re.matches(in: text, range: NSRange(location: 0, length: ns.length)).compactMap {
+            $0.numberOfRanges > 1 ? ns.substring(with: $0.range(at: 1)) : nil
+        }
     }
 }

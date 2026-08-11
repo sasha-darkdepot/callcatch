@@ -16,11 +16,12 @@ Plaud (see Gotchas). Verified against **Plaud v1.3.7, macOS 14.4+**.
 ## Commands
 
 ```bash
-swift test                             # 48 unit tests — run before declaring work done
-swift build                            # debug build
-INSTALL=1 bash scripts/build-app.sh    # signed .app → /Applications/Call Catch.app
-bash scripts/build-app.sh              # build only → build/Call Catch.app
-CALLCATCH_DEBUG=1 …                     # verbose logging to ~/Library/Logs/CallCatch.log
+swift test                                    # 57 unit tests — run before declaring work done
+swift test --filter AppStateTests/testFoo     # a single test
+swift build                                   # debug build
+INSTALL=1 bash scripts/build-app.sh           # signed .app → /Applications/Call Catch.app
+bash scripts/build-app.sh                     # build only → build/CallCatch.app
+CALLCATCH_DEBUG=1 …                            # verbose logging to ~/Library/Logs/CallCatch.log
 ```
 
 There is no linter/formatter in this repo; match the style of surrounding code.
@@ -39,7 +40,7 @@ calls in adapters.
 - `PlaudControlling` / `AppStateDelegate` protocols are the seams — new logic is
   tested against `MockPlaud` / `MockScheduler` in `Tests/`.
 - Adapters (not unit-tested): `MicMonitor` (CoreAudio), `PlaudAX` (Accessibility
-  stop), `PlaudController`, `BubbleWindow`, `MenuBar`, `Settings`, `main`.
+  stop), `PlaudController`, `BubbleWindow`, `MenuBar`, `Settings`, `Log`, `main`.
 
 ## Gotchas (institutional knowledge — verify before changing)
 
@@ -50,11 +51,14 @@ re-verifying against live Plaud.
   Stop is a synthetic click on Plaud's recording widget (see below).
 - **Stopping the recording** (`PlaudAX.swift`): the widget is a floating panel
   (window layer > 25) that **`AXWindows` does not enumerate**. Find it via
-  `CGWindowList` + `AXUIElementCopyElementAtPosition` hit-test. **`AXPress` and
-  background `CGEventPostToPid` are no-ops on Electron web content** (they return
-  success and do nothing) — click with a **global HID `CGEvent`** at the button's
-  live screen center. Confirm success by tailing Plaud's log for
-  `stopRecording by scene`.
+  `CGWindowList` + `AXUIElementCopyElementAtPosition` hit-test. Electron only
+  builds its a11y tree once an AT asks, so **set `AXManualAccessibility=true` on
+  Plaud's app element first** or the hit-test finds nothing on a fresh machine.
+  **`AXPress` and background `CGEventPostToPid` are no-ops on Electron web
+  content** (they return success and do nothing) — click with a **global HID
+  `CGEvent`** at the button's live screen center. Candidates are PID-filtered to
+  Plaud and re-scanned per attempt; success is confirmed by tailing Plaud's log
+  for `stopRecording by scene`.
 - **Starting** relies on the `plaud://record?auto=1&user_id=…` deep link; cold
   start is silently rejected (`reason=not_available`) until Plaud's profile
   loads, so start is **retried** and confirmed via Plaud's log, never assumed.

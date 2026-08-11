@@ -38,7 +38,11 @@ final class BubbleWindow {
             size = NSSize(width: 420, height: 52) // страховка от невидимой панели
         }
         p.setContentSize(size)
-        if let screen = NSScreen.main {
+        // Экран под курсором (не всегда main у .accessory-приложения) — бабл
+        // появляется там, где пользователь смотрит, а не на «главном» мониторе.
+        let screen = NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }
+            ?? NSScreen.main
+        if let screen {
             let x = screen.visibleFrame.midX - size.width / 2
             let y = screen.visibleFrame.minY + 80
             p.setFrameOrigin(NSPoint(x: x, y: y))
@@ -103,6 +107,10 @@ struct BubbleView: View {
                 Text("Останавливаю…")
             case .stopped:
                 Text("Запись остановлена")
+            case .stopFailed:
+                Text("⚠️ Останови запись в Plaud вручную")
+                Button("Открыть Plaud", action: onOpenPlaud)
+                dismissButton
             }
         }
         .padding(.horizontal, 18)

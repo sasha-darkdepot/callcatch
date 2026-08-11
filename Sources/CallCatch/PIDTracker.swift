@@ -29,6 +29,13 @@ final class PIDTracker {
         self.scheduler = scheduler
     }
 
+    /// Держит ли приложение микрофон прямо сейчас (есть хоть один активный PID).
+    /// Отличается от «звонок активен»: последний остаётся true ещё endDebounce
+    /// секунд после отпускания микрофона.
+    func isMicActive(_ app: WatchedApp) -> Bool {
+        !(activePIDs[app]?.isEmpty ?? true)
+    }
+
     func micStateChanged(pid: pid_t, app: WatchedApp, isRunningInput: Bool) {
         // Идемпотентность: поллинг и листенеры могут доставлять одно состояние
         // многократно; повторный false не должен сбрасывать дебаунс конца звонка.

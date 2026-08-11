@@ -1,5 +1,7 @@
 # CallCatch
 
+[![CI](https://github.com/sasha-darkdepot/callcatch/actions/workflows/ci.yml/badge.svg)](https://github.com/sasha-darkdepot/callcatch/actions/workflows/ci.yml)
+
 Menu-bar utility for macOS that catches the start of a call in **Discord,
 Signal, Telegram, or WhatsApp** and offers to record it with
 [Plaud](https://web.plaud.ai) — one click to start, one click to stop.
@@ -40,7 +42,7 @@ INSTALL=1 bash scripts/build-app.sh   # build, sign, install to /Applications
 open "/Applications/Call Catch.app"
 ```
 
-Without `INSTALL=1` the app is built to `build/Call Catch.app` and not copied.
+Without `INSTALL=1` the app is built to `build/CallCatch.app` and not copied.
 
 ## First run
 

@@ -45,6 +45,7 @@ final class AppStateTests: XCTestCase {
     var scheduler = MockScheduler()
     var autoMode = false
     var userIdKnown = true
+    var micActive = true
 
     override func setUp() {
         plaud = MockPlaud()
@@ -52,11 +53,14 @@ final class AppStateTests: XCTestCase {
         scheduler = MockScheduler()
         autoMode = false
         userIdKnown = true
+        micActive = true
     }
 
     func makeState() -> AppState {
         let s = AppState(plaud: plaud, autoRecord: { self.autoMode },
-                         userIdAvailable: { self.userIdKnown }, scheduler: scheduler.schedule)
+                         userIdAvailable: { self.userIdKnown },
+                         micCurrentlyActive: { _ in self.micActive },
+                         scheduler: scheduler.schedule)
         s.delegate = log
         return s
     }
@@ -304,6 +308,51 @@ final class AppStateTests: XCTestCase {
         s.tickPollStart()                     // юзер остановил в самом Plaud
         XCTAssertEqual(log.bubbles.last, .hidden)
         XCTAssertFalse(log.menu.last!.canStop)
+    }
+
+    func testAutoRecordSkippedIfMicReleasedByFire() { // ревью: реальный порог, не ~2 сек
+        autoMode = true
+        let s = makeState()
+        s.callStarted(app: .telegram)   // короткое голосовое: звонок ещё «активен» (дебаунс),
+        micActive = false               // но микрофон уже отпущен к моменту срабатывания таймера
+        scheduler.fireAll(delay: 7.0)
+        XCTAssertEqual(plaud.deepLinksSent, 0) // авто-старт не сработал
+        _ = s
+    }
+
+    func testAutoRecordFiresIfMicStillHeld() {
+        autoMode = true
+        let s = makeState()
+        s.callStarted(app: .discord)
+        micActive = true
+        scheduler.fireAll(delay: 7.0)
+        XCTAssertEqual(plaud.deepLinksSent, 1)
+        _ = s
+    }
+
+    func testDismissCancelsPendingAutoRecord() { // ревью: ✕ = не записывать
+        autoMode = true
+        let s = makeState()
+        s.callStarted(app: .discord)
+        s.dismissTapped()
+        scheduler.fireAll(delay: 7.0)
+        XCTAssertEqual(plaud.deepLinksSent, 0)
+    }
+
+    func testConfirmedLeaseReleasedWhenPlaudQuits() { // ревью: не залипать .confirmed
+        let s = makeRecordingState()
+        XCTAssertTrue(log.menu.last!.canStop)
+        plaud.running = false            // Plaud вышел/упал, лог стопа не написал
+        plaud.outcome = nil
+        s.tickPollStart()
+        XCTAssertFalse(log.menu.last!.canStop) // lease освобождён — больше не .confirmed
+    }
+
+    func testStopFailureShowsStopFailedBubble() { // ревью: не прятать бабл молча
+        let s = makeRecordingState()
+        plaud.axStopResult = false
+        s.stopTapped()
+        XCTAssertEqual(log.bubbles.last, .stopFailed)
     }
 
     func testReofferAfterStopWithOngoingSecondCall() { // re-offer после освобождения lease

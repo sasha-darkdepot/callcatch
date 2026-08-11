@@ -15,18 +15,11 @@ enum PlaudAX {
     static let plaudBundleID = "ai.plaud.desktop.plaud"
     private static let systemWide = AXUIElementCreateSystemWide()
 
+    static var isTrusted: Bool { AXIsProcessTrusted() }
+
     static func requestPermission() {
         let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
         AXIsProcessTrustedWithOptions(opts)
-    }
-
-    static func plaudAppElement() -> AXUIElement? {
-        guard AXIsProcessTrusted(),
-              let plaud = NSRunningApplication.runningApplications(withBundleIdentifier: plaudBundleID).first
-        else { return nil }
-        let app = AXUIElementCreateApplication(plaud.processIdentifier)
-        AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
-        return app
     }
 
     private static func plaudPID() -> pid_t? {
@@ -44,13 +37,19 @@ enum PlaudAX {
 
     private static func frame(_ el: AXUIElement) -> CGRect {
         var rect = CGRect.zero
-        if let posVal = attr(el, kAXPositionAttribute) {
+        if let posVal = attr(el, kAXPositionAttribute), CFGetTypeID(posVal) == AXValueGetTypeID() {
             AXValueGetValue(posVal as! AXValue, .cgPoint, &rect.origin)
         }
-        if let sizeVal = attr(el, kAXSizeAttribute) {
+        if let sizeVal = attr(el, kAXSizeAttribute), CFGetTypeID(sizeVal) == AXValueGetTypeID() {
             AXValueGetValue(sizeVal as! AXValue, .cgSize, &rect.size)
         }
         return rect
+    }
+
+    private static func elementPID(_ el: AXUIElement) -> pid_t {
+        var p: pid_t = -1
+        AXUIElementGetPid(el, &p)
+        return p
     }
 
     private static func actions(_ el: AXUIElement) -> [String] {
@@ -83,33 +82,52 @@ enum PlaudAX {
         !floatingWidgetBounds().isEmpty
     }
 
-    /// Hit-test плавающего виджета: нажимаемые кнопки (≤120pt) + фрейм таймера записи.
-    private static func widgetScan() -> (buttons: [CGRect], timer: CGRect?) {
+    /// Включить у Plaud (Electron) построение accessibility-дерева web-контента.
+    /// Без этого на свежей системе (если ни один AT его не активировал) hit-test
+    /// не находит кнопок и стоп молча не работает. Идемпотентно.
+    @discardableResult
+    private static func enableManualAccessibility() -> Bool {
+        guard AXIsProcessTrusted(),
+              let plaud = NSRunningApplication.runningApplications(withBundleIdentifier: plaudBundleID).first
+        else { return false }
+        let app = AXUIElementCreateApplication(plaud.processIdentifier)
+        AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        return true
+    }
+
+    /// Hit-test плавающего виджета: нажимаемые кнопки (≤120pt), принадлежащие
+    /// Plaud (PID-проверка — не кликнуть по чужому окну поверх), + фрейм таймера.
+    private static func widgetScan(pid: pid_t) -> (buttons: [CGRect], timer: CGRect?) {
         var byKey: [String: CGRect] = [:]
         var timer: CGRect?
-        let re = try! NSRegularExpression(pattern: #"^\d{1,2}:\d{2}(:\d{2})?$"#)
+        let re = try? NSRegularExpression(pattern: #"^\d{1,2}:\d{2}(:\d{2})?$"#)
         for r in floatingWidgetBounds() {
             var y = r.minY + 4
             while y < r.maxY - 2 {
                 var x = r.minX + 4
                 while x < r.maxX - 2 {
                     var hit: AXUIElement?
-                    if AXUIElementCopyElementAtPosition(systemWide, Float(x), Float(y), &hit) == .success, let el = hit {
-                        if timer == nil, str(el, kAXRoleAttribute) == "AXStaticText" {
+                    if AXUIElementCopyElementAtPosition(systemWide, Float(x), Float(y), &hit) == .success,
+                       let el = hit, elementPID(el) == pid {
+                        if timer == nil, let re, str(el, kAXRoleAttribute) == "AXStaticText" {
                             let v = str(el, kAXValueAttribute).trimmingCharacters(in: .whitespaces)
                             if re.firstMatch(in: v, range: NSRange(v.startIndex..., in: v)) != nil { timer = frame(el) }
                         }
                         var cur: AXUIElement? = el
                         var hops = 0
                         while let c = cur, hops < 6 {
-                            if actions(c).contains("AXPress") {
+                            if actions(c).contains("AXPress"), elementPID(c) == pid {
                                 let f = frame(c)
                                 if f.width < 120, f.height < 120 {
                                     byKey["\(Int(f.origin.x)),\(Int(f.origin.y)),\(Int(f.width)),\(Int(f.height))"] = f
                                 }
                                 break
                             }
-                            cur = attr(c, kAXParentAttribute) as! AXUIElement?
+                            if let parent = attr(c, kAXParentAttribute) {
+                                cur = (parent as! AXUIElement)
+                            } else {
+                                cur = nil
+                            }
                             hops += 1
                         }
                     }
@@ -122,16 +140,18 @@ enum PlaudAX {
     }
 
     /// Кандидаты на стоп, наиболее вероятный — первым. Развёрнутая плашка: кнопка
-    /// справа от таймера. Свёрнутый виджет: верхняя мелкая кнопка.
-    private static func orderedStopCandidates() -> [CGRect] {
-        let scan = widgetScan()
+    /// справа от таймера. Свёрнутый виджет: верхняя мелкая кнопка. Порядок
+    /// детерминирован (сортировка), чтобы перебор был воспроизводимым.
+    private static func orderedStopCandidates(pid: pid_t) -> [CGRect] {
+        let scan = widgetScan(pid: pid)
         let btns = scan.buttons
         if let t = scan.timer {
             let right = btns.filter { abs($0.midY - t.midY) < 30 && $0.midX > t.midX }.sorted { $0.midX < $1.midX }
             let rest = btns.filter { b in !right.contains(where: { $0 == b }) }
+                .sorted { ($0.origin.y, $0.origin.x) < ($1.origin.y, $1.origin.x) }
             return right + rest
         }
-        return btns.sorted { $0.origin.y < $1.origin.y }
+        return btns.sorted { ($0.origin.y, $0.origin.x) < ($1.origin.y, $1.origin.x) }
     }
 
     /// Глобальный HID-клик по экранным координатам (двигает курсор). Единственный
@@ -150,29 +170,42 @@ enum PlaudAX {
     /// с логом Plaud (self-correcting). Обычно срабатывает первый кандидат без
     /// побочных кликов. Возвращает true только по подтверждению `stopRecording`.
     static func stopRecording(logsDirectory: URL) -> Bool {
-        guard plaudPID() != nil, AXIsProcessTrusted() else {
+        guard let pid = plaudPID(), AXIsProcessTrusted() else {
             Log.info("PlaudAX.stop: no trust or Plaud not running")
             return false
         }
-        let candidates = orderedStopCandidates()
-        guard !candidates.isEmpty else {
-            Log.info("PlaudAX.stop: recording widget not found")
-            return false
-        }
+        // Обязательный первый шаг: включить a11y-дерево Electron, иначе hit-test
+        // не увидит кнопок на свежей системе. Дать дереву построиться.
+        enableManualAccessibility()
+        Thread.sleep(forTimeInterval: 0.3)
+
         let tail = PlaudLogTail(logsDirectory: logsDirectory)
-        Log.info("PlaudAX.stop: \(candidates.count) candidates")
-        for (i, f) in candidates.enumerated() {
+        var tried = Set<String>()
+        let maxAttempts = 6
+        for attempt in 0..<maxAttempts {
+            // Ре-скан каждый раунд: координаты свежие (виджет мог сдвинуться после
+            // неудачного клика), и уже нажатые кнопки пропускаем.
+            let candidates = orderedStopCandidates(pid: pid)
+            guard let f = candidates.first(where: { !tried.contains(key($0)) }) else {
+                Log.info("PlaudAX.stop: no more candidates (attempt \(attempt))")
+                break
+            }
+            tried.insert(key(f))
             let cp = tail.checkpoint()
             clickGlobal(x: f.midX, y: f.midY)
             for _ in 0..<4 {
                 Thread.sleep(forTimeInterval: 0.4)
                 if tail.containsLine("stopRecording by scene", since: cp) {
-                    Log.info("PlaudAX.stop: stopped via candidate[\(i)] @\(Int(f.origin.x)),\(Int(f.origin.y))")
+                    Log.info("PlaudAX.stop: stopped via candidate @\(Int(f.origin.x)),\(Int(f.origin.y))")
                     return true
                 }
             }
         }
         Log.info("PlaudAX.stop: no candidate stopped recording")
         return false
+    }
+
+    private static func key(_ f: CGRect) -> String {
+        "\(Int(f.origin.x)),\(Int(f.origin.y)),\(Int(f.width)),\(Int(f.height))"
     }
 }
