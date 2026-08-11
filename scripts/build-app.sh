@@ -13,7 +13,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <dict>
     <key>CFBundleExecutable</key><string>CallCatch</string>
     <key>CFBundleIdentifier</key><string>dev.sasha.callcatch</string>
-    <key>CFBundleName</key><string>CallCatch</string>
+    <key>CFBundleName</key><string>Call Catch</string>
+    <key>CFBundleDisplayName</key><string>Call Catch</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>0.1.0</string>
     <key>CFBundleVersion</key><string>1</string>
@@ -39,7 +40,7 @@ fi
 # подпись сохраняет TCC-разрешения, поэтому перевыдавать Accessibility не нужно).
 if [ "${INSTALL:-}" = "1" ]; then
     pkill -x CallCatch 2>/dev/null || true
-    rm -rf /Applications/CallCatch.app
-    cp -R "$APP" /Applications/CallCatch.app
-    echo "Installed to /Applications/CallCatch.app"
+    rm -rf "/Applications/CallCatch.app" "/Applications/Call Catch.app"
+    cp -R "$APP" "/Applications/Call Catch.app"
+    echo "Installed to /Applications/Call Catch.app"
 fi
