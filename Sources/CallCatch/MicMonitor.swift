@@ -26,7 +26,8 @@ final class MicMonitor {
         let listBlock: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
             self?.queue.async { self?.refreshProcessList() }
         }
-        AudioObjectAddPropertyListenerBlock(systemObj, &listAddr, queue, listBlock)
+        let err = AudioObjectAddPropertyListenerBlock(systemObj, &listAddr, queue, listBlock)
+        Log.info("MicMonitor: start, list listener err=\(err)")
         refreshProcessList()
     }
 
@@ -34,9 +35,11 @@ final class MicMonitor {
         var listAddr = Self.addr(kAudioHardwarePropertyProcessObjectList)
         let systemObj = AudioObjectID(kAudioObjectSystemObject)
         var size: UInt32 = 0
-        guard AudioObjectGetPropertyDataSize(systemObj, &listAddr, 0, nil, &size) == noErr else { return }
+        let sizeErr = AudioObjectGetPropertyDataSize(systemObj, &listAddr, 0, nil, &size)
+        guard sizeErr == noErr else { Log.info("MicMonitor: list size err=\(sizeErr)"); return }
         var ids = [AudioObjectID](repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.size)
-        guard AudioObjectGetPropertyData(systemObj, &listAddr, 0, nil, &size, &ids) == noErr else { return }
+        let dataErr = AudioObjectGetPropertyData(systemObj, &listAddr, 0, nil, &size, &ids)
+        guard dataErr == noErr else { Log.info("MicMonitor: list data err=\(dataErr)"); return }
 
         let current = Set(ids)
         for (obj, pid) in knownProcesses where !current.contains(obj) {
@@ -49,21 +52,24 @@ final class MicMonitor {
         }
         for obj in ids where knownProcesses[obj] == nil {
             let pid = readPID(obj)
-            guard pid > 0, watchedApp(for: obj, pid: pid) != nil else { continue }
+            guard pid > 0, let app = watchedApp(for: obj, pid: pid) else { continue }
             knownProcesses[obj] = pid
             let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
                 self?.queue.async { self?.inputStateChanged(obj) }
             }
             listenerBlocks[obj] = block
             var inputAddr = Self.addr(kAudioProcessPropertyIsRunningInput)
-            AudioObjectAddPropertyListenerBlock(obj, &inputAddr, queue, block)
+            let err = AudioObjectAddPropertyListenerBlock(obj, &inputAddr, queue, block)
+            Log.info("MicMonitor: watching \(app.rawValue) pid=\(pid) obj=\(obj) listenerErr=\(err)")
             inputStateChanged(obj)
         }
     }
 
     private func inputStateChanged(_ obj: AudioObjectID) {
         guard let pid = knownProcesses[obj], let app = watchedApp(for: obj, pid: pid) else { return }
-        tracker.micStateChanged(pid: pid, app: app, isRunningInput: readIsRunningInput(obj))
+        let running = readIsRunningInput(obj)
+        Log.info("MicMonitor: \(app.rawValue) pid=\(pid) input=\(running)")
+        tracker.micStateChanged(pid: pid, app: app, isRunningInput: running)
     }
 
     private func watchedApp(for obj: AudioObjectID, pid: pid_t) -> WatchedApp? {

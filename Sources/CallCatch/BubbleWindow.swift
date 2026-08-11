@@ -32,7 +32,11 @@ final class BubbleWindow {
         let hosting = NSHostingView(rootView: content)
         let p = panel ?? makePanel()
         p.contentView = hosting
-        let size = hosting.fittingSize
+        hosting.layoutSubtreeIfNeeded() // fittingSize до первого layout может быть нулевым
+        var size = hosting.fittingSize
+        if size.width < 10 || size.height < 10 {
+            size = NSSize(width: 420, height: 52) // страховка от невидимой панели
+        }
         p.setContentSize(size)
         if let screen = NSScreen.main {
             let x = screen.visibleFrame.midX - size.width / 2
@@ -40,6 +44,7 @@ final class BubbleWindow {
             p.setFrameOrigin(NSPoint(x: x, y: y))
         }
         p.orderFrontRegardless()
+        Log.info("BubbleWindow: show \(state) frame=\(p.frame)")
         panel = p
     }
 

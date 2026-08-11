@@ -4,6 +4,7 @@ import Foundation
 final class MockTimer: Cancellable {
     var fire: (() -> Void)?
     var cancelled = false
+    var fired = false
     func cancel() { cancelled = true }
 }
 
@@ -17,15 +18,23 @@ final class MockScheduler {
         return t
     }
 
-    /// Стреляет последним запланированным (если не отменён).
+    /// Стреляет последним запланированным (если не отменён и ещё не стрелял).
     func fireLast() {
         guard let t = timers.last?.timer else { return }
-        if !t.cancelled { t.fire?() }
+        if !t.cancelled && !t.fired {
+            t.fired = true
+            t.fire?()
+        }
     }
 
-    /// Стреляет всеми неотменёнными с данной задержкой (для выборочного продвижения времени).
+    /// Стреляет всеми неотменёнными и ещё не стрелявшими с данной задержкой.
+    /// Итерация по снапшоту: таймеры, добавленные в ходе стрельбы, ждут следующего вызова.
     func fireAll(delay: TimeInterval) {
-        for (d, t) in timers where d == delay && !t.cancelled { t.fire?() }
+        let snapshot = timers
+        for (d, t) in snapshot where d == delay && !t.cancelled && !t.fired {
+            t.fired = true
+            t.fire?()
+        }
     }
 }
 

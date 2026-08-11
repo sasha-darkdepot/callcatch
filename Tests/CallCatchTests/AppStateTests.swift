@@ -10,13 +10,18 @@ final class MockPlaud: PlaudControlling {
     var axStopResult = true
     var axStopCalls = 0
     var axRecordingVisible: Bool? = false
+    var axStopAsync = false
+    var pendingStopCompletions: [(Bool) -> Void] = []
 
     func sendStartDeepLink() { deepLinksSent += 1 }
     func openPlaudWindow() { openedWindow += 1 }
     func isPlaudRunning() -> Bool { running }
     func pollStartOutcome() -> StartOutcome? { outcome }
     func makeCheckpoint() { checkpoints += 1 }
-    func performAXStop(completion: @escaping (Bool) -> Void) { axStopCalls += 1; completion(axStopResult) }
+    func performAXStop(completion: @escaping (Bool) -> Void) {
+        axStopCalls += 1
+        if axStopAsync { pendingStopCompletions.append(completion) } else { completion(axStopResult) }
+    }
     func isRecordingVisibleViaAX() -> Bool? { axRecordingVisible }
 }
 
@@ -34,16 +39,19 @@ final class AppStateTests: XCTestCase {
     var log = StateLog()
     var scheduler = MockScheduler()
     var autoMode = false
+    var userIdKnown = true
 
     override func setUp() {
         plaud = MockPlaud()
         log = StateLog()
         scheduler = MockScheduler()
         autoMode = false
+        userIdKnown = true
     }
 
     func makeState() -> AppState {
-        let s = AppState(plaud: plaud, autoRecord: { self.autoMode }, scheduler: scheduler.schedule)
+        let s = AppState(plaud: plaud, autoRecord: { self.autoMode },
+                         userIdAvailable: { self.userIdKnown }, scheduler: scheduler.schedule)
         s.delegate = log
         return s
     }
@@ -216,5 +224,72 @@ final class AppStateTests: XCTestCase {
         s.dismissTapped()
         XCTAssertEqual(log.bubbles.last, .hidden)
         XCTAssertTrue(log.menu.last!.canRecord) // «Записать сейчас» в меню остаётся доступным
+    }
+
+    // MARK: - Фиксы код-ревью
+
+    func testDoubleStopTappedFiresSingleAXStop() { // ревью #2
+        let s = makeRecordingState()
+        plaud.axStopAsync = true
+        s.stopTapped()
+        XCTAssertFalse(log.menu.last!.canStop) // кнопка гаснет синхронно
+        s.stopTapped()                          // повторный клик в полёте
+        XCTAssertEqual(plaud.axStopCalls, 1)
+        plaud.pendingStopCompletions.first?(true)
+        XCTAssertEqual(log.bubbles.last, .stopped)
+        XCTAssertFalse(log.menu.last!.canStop)
+    }
+
+    func testAXWatchExhaustionReleasesLease() { // ревью #1
+        let s = makeRecordingState()
+        plaud.axStopResult = false
+        plaud.axRecordingVisible = true // AX «видит запись» вечно
+        s.stopTapped()                  // fallback + запуск watch
+        for _ in 0..<31 { scheduler.fireAll(delay: 10.0) }
+        XCTAssertFalse(log.menu.last!.canStop) // lease освобождён после исчерпания
+    }
+
+    func testAXWatchReleasesWhenPlaudQuit() { // ревью #1 (nil != false)
+        let s = makeRecordingState()
+        plaud.axStopResult = false
+        plaud.axRecordingVisible = nil
+        plaud.running = false
+        s.stopTapped()
+        scheduler.fireAll(delay: 10.0)
+        XCTAssertFalse(log.menu.last!.canStop)
+    }
+
+    func testMissingUserIdDisablesRecordAndBlocksStart() { // ревью #6
+        userIdKnown = false
+        let s = makeState()
+        s.callStarted(app: .discord)
+        guard case let .callDetected(_, reason) = log.bubbles.last else {
+            return XCTFail("expected callDetected, got \(String(describing: log.bubbles.last))")
+        }
+        XCTAssertNotNil(reason)
+        XCTAssertFalse(log.menu.last!.canRecord)
+        s.recordTapped()
+        XCTAssertEqual(plaud.deepLinksSent, 0)
+        XCTAssertEqual(plaud.checkpoints, 0)
+    }
+
+    func testMissingUserIdBlocksAutoRecord() { // ревью #6, авто-режим
+        userIdKnown = false
+        autoMode = true
+        let s = makeState()
+        s.callStarted(app: .discord)
+        scheduler.fireAll(delay: 7.0)
+        XCTAssertEqual(plaud.deepLinksSent, 0)
+        _ = s
+    }
+
+    func testReofferAfterStopWithOngoingSecondCall() { // re-offer после освобождения lease
+        let s = makeRecordingState()          // discord пишет
+        s.callStarted(app: .telegram)         // второй звонок, кнопка заблокирована
+        s.callEnded(app: .discord)            // владелец завершился → offerStop
+        plaud.axStopResult = true
+        s.stopTapped()                        // стоп успешен → lease свободен
+        XCTAssertTrue(log.bubbles.contains(.callDetected(app: .telegram, recordDisabledReason: nil)))
+        XCTAssertTrue(log.menu.last!.canRecord)
     }
 }

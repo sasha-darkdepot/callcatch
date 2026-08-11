@@ -23,6 +23,10 @@ final class PlaudLogTail {
 
     private func todayLogURL() -> URL {
         let f = DateFormatter()
+        // Фиксированные локаль/календарь: имя файла Plaud всегда григорианское,
+        // а DateFormatter по умолчанию наследует календарь пользователя.
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.calendar = Calendar(identifier: .gregorian)
         f.dateFormat = "yyyy-MM-dd"
         return logsDirectory.appendingPathComponent("log-\(f.string(from: dateProvider())).log")
     }

@@ -6,7 +6,19 @@ final class TimerCancellable: Cancellable {
     func cancel() { timer.invalidate() }
 }
 
+/// Таймеры в .common: дефолтный режим RunLoop замирает, пока открыто меню
+/// статус-бара (.eventTracking), а ретраи/дедлайны/поллинг должны тикать всегда.
+func makeScheduler() -> (TimeInterval, @escaping () -> Void) -> Cancellable {
+    { delay, block in
+        let t = Timer(timeInterval: delay, repeats: false) { _ in block() }
+        RunLoop.main.add(t, forMode: .common)
+        return TimerCancellable(timer: t)
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate {
+    static let userIdMissingMessage = "user_id не найден: открой web.plaud.ai, нажми Record, перезапусти CallCatch"
+
     var settings: Settings!
     var appState: AppState!
     var bubble: BubbleWindow!
@@ -14,23 +26,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate {
     var micMonitor: MicMonitor!
     var plaudController: PlaudController!
     var pollTimer: Timer?
-    var userIdMissing = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         settings = Settings()
-        let foundId = settings.ensureUserId()
-        userIdMissing = !foundId
+        settings.ensureUserId()
 
         let logTail = PlaudLogTail(logsDirectory: Settings.plaudLogsDir)
         plaudController = PlaudController(logTail: logTail, userId: { [weak self] in self?.settings.userId })
 
-        func schedule(_ delay: TimeInterval, _ block: @escaping () -> Void) -> Cancellable {
-            let t = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { _ in block() }
-            return TimerCancellable(timer: t)
-        }
-
+        let schedule = makeScheduler()
         appState = AppState(plaud: plaudController,
                             autoRecord: { [weak self] in self?.settings.autoRecord ?? false },
+                            userIdAvailable: { [weak self] in self?.settings.userId != nil },
                             scheduler: schedule)
         appState.delegate = self
 
@@ -56,15 +63,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate {
         micMonitor.start()
 
         // Лёгкий поллинг результата старта; вне pending AppState игнорирует тики.
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+        let poll = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
             self?.appState.tickPollStart()
         }
+        RunLoop.main.add(poll, forMode: .common)
+        pollTimer = poll
 
-        if userIdMissing {
-            menuBar.update(status: .needsAttention("user_id не найден: открой web.plaud.ai, нажми Record, перезапусти CallCatch"),
-                           canRecordNow: false, canStopNow: false)
+        Log.info("CallCatch started; userId=\(settings.userId.map { String($0.prefix(6)) + "…" } ?? "nil")")
+
+        if CommandLine.arguments.contains("--test-bubble") {
+            // Диагностический режим: показать бабл без реального звонка.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+                Log.info("TEST: simulating callStarted(telegram)")
+                self?.appState.callStarted(app: .telegram)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 15) {
+                    self?.appState.callEnded(app: .telegram)
+                }
+            }
         }
-        NSLog("CallCatch started; userId=\(settings.userId.map { String($0.prefix(6)) + "…" } ?? "nil")")
     }
 
     // MARK: - AppStateDelegate
@@ -75,11 +91,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate {
 
     func menuChanged(status: MenuStatus, canRecordNow: Bool, canStopNow: Bool) {
         // Отсутствие user_id перекрывает обычный статус (иконка «нужно внимание»).
-        if userIdMissing, settings.userId == nil {
-            menuBar.update(status: .needsAttention("user_id не найден: открой web.plaud.ai, нажми Record, перезапусти CallCatch"),
+        if settings.userId == nil {
+            menuBar.update(status: .needsAttention(Self.userIdMissingMessage),
                            canRecordNow: false, canStopNow: canStopNow)
         } else {
-            userIdMissing = false
             menuBar.update(status: status, canRecordNow: canRecordNow, canStopNow: canStopNow)
         }
     }
