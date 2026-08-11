@@ -56,11 +56,19 @@ enum PlaudAX {
 
     /// Нажать кнопку стопа и убедиться, что индикатор записи исчез (до 5 сек).
     static func pressStopAndVerify() -> Bool {
-        guard let app = plaudAppElement() else { return false }
+        guard let app = plaudAppElement() else {
+            NSLog("PlaudAX: no app element (no trust or Plaud not running)")
+            return false
+        }
         Thread.sleep(forTimeInterval: 0.5) // дать Electron построить дерево
         let buttons = allButtons(app)
+        // Диагностика для калибровки needles по живому Plaud (см. план, Task 11).
+        NSLog("PlaudAX: buttons=[%@]", buttons.map { "'\($0.text)'" }.joined(separator: ", "))
         guard let target = buttons.first(where: { b in stopButtonNeedles.contains { b.text.contains($0) } })
-        else { return false }
+        else {
+            NSLog("PlaudAX: stop button not found among %d buttons", buttons.count)
+            return false
+        }
         guard AXUIElementPerformAction(target.element, kAXPressAction as CFString) == .success else { return false }
         for _ in 0..<10 {
             Thread.sleep(forTimeInterval: 0.5)
