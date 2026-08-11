@@ -34,3 +34,12 @@ else
     codesign -s - --force "$APP"
     echo "Built $APP (ad-hoc — '$IDENTITY' not found in keychain)"
 fi
+
+# INSTALL=1 — переустановить в /Applications (постоянное место; стабильная
+# подпись сохраняет TCC-разрешения, поэтому перевыдавать Accessibility не нужно).
+if [ "${INSTALL:-}" = "1" ]; then
+    pkill -x CallCatch 2>/dev/null || true
+    rm -rf /Applications/CallCatch.app
+    cp -R "$APP" /Applications/CallCatch.app
+    echo "Installed to /Applications/CallCatch.app"
+fi

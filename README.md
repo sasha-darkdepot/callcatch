@@ -19,10 +19,14 @@ Telegram (обе версии), WhatsApp** по использованию ми�
 ## Сборка и установка
 
 ```bash
-bash scripts/build-app.sh
-cp -r build/CallCatch.app /Applications/
+INSTALL=1 bash scripts/build-app.sh   # собрать, подписать и поставить в /Applications
 open /Applications/CallCatch.app
 ```
+
+Сборка подписывается сертификатом Apple Development (если он есть в связке
+ключей) — благодаря стабильной подписи разрешение Accessibility сохраняется
+между пересборками. Без сертификата используется ad-hoc-подпись (тогда
+Accessibility приходится выдавать заново после каждой сборки).
 
 ## Первый запуск
 
