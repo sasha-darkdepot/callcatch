@@ -17,7 +17,8 @@ func makeScheduler() -> (TimeInterval, @escaping () -> Void) -> Cancellable {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate {
-    static let userIdMissingMessage = "user_id не найден: открой web.plaud.ai, нажми Record, перезапусти CallCatch"
+    static let userIdMissingMessage = "user_id не найден: открой web.plaud.ai, нажми Record, затем «Найти user_id заново»"
+    static let axMissingMessage = "Выдай доступ Accessibility в System Settings — нужен для остановки записи"
 
     var settings: Settings!
     var appState: AppState!
@@ -26,6 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate {
     var micMonitor: MicMonitor!
     var plaudController: PlaudController!
     var pollTimer: Timer?
+    var sigusr2Source: DispatchSourceSignal?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         settings = Settings()
@@ -35,35 +37,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate {
         plaudController = PlaudController(logTail: logTail, userId: { [weak self] in self?.settings.userId })
 
         let schedule = makeScheduler()
+        let tracker = PIDTracker(endDebounce: 5.0, scheduler: schedule)
+
         appState = AppState(plaud: plaudController,
                             autoRecord: { [weak self] in self?.settings.autoRecord ?? false },
                             userIdAvailable: { [weak self] in self?.settings.userId != nil },
+                            micCurrentlyActive: { tracker.isMicActive($0) },
                             scheduler: schedule)
         appState.delegate = self
 
         bubble = BubbleWindow(
             onRecord: { [weak self] in
-                PlaudAX.requestPermission() // ранний запрос AX-доверия (понадобится для стопа)
+                PlaudAX.requestPermission()
                 self?.appState.recordTapped()
             },
             onStop: { [weak self] in
-                PlaudAX.requestPermission() // промпт Accessibility, если ещё не выдано
+                PlaudAX.requestPermission()
                 self?.appState.stopTapped()
             },
             onOpenPlaud: { [weak self] in self?.plaudController.openPlaudWindow() },
             onDismiss: { [weak self] in self?.appState.dismissTapped() }
         )
-        menuBar = MenuBar(settings: settings,
-                          onRecord: { [weak self] in
-                              PlaudAX.requestPermission()
-                              self?.appState.recordTapped()
-                          },
-                          onStop: { [weak self] in
-                              PlaudAX.requestPermission()
-                              self?.appState.stopTapped()
-                          })
+        menuBar = MenuBar(
+            settings: settings,
+            onRecord: { [weak self] in
+                PlaudAX.requestPermission()
+                self?.appState.recordTapped()
+            },
+            onStop: { [weak self] in self?.appState.stopTapped() },
+            onFindUserId: { [weak self] in
+                self?.settings.rescanUserId()
+                self?.appState.refreshMenu()
+            }
+        )
 
-        let tracker = PIDTracker(endDebounce: 5.0, scheduler: schedule)
         tracker.delegate = appState
         micMonitor = MicMonitor(tracker: tracker)
         micMonitor.start()
@@ -75,23 +82,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate {
         RunLoop.main.add(poll, forMode: .common)
         pollTimer = poll
 
-        Log.info("CallCatch started; userId=\(settings.userId.map { String($0.prefix(6)) + "…" } ?? "nil"); axTrusted=\(AXIsProcessTrusted())")
+        // Проактивно попросить Accessibility на старте (нужно для стопа). Промпт
+        // покажется только если доступа ещё нет; при уже выданном — no-op.
+        if !PlaudAX.isTrusted { PlaudAX.requestPermission() }
+
+        Log.info("CallCatch started; userId=\(settings.userId.map { String($0.prefix(6)) + "…" } ?? "nil"); axTrusted=\(PlaudAX.isTrusted)")
+        appState.refreshMenu() // отразить needsAttention сразу
 
         if ProcessInfo.processInfo.environment["CALLCATCH_DEBUG"] == "1" {
-            // Отладка: kill -USR2 <pid> → выполнить стоп записи вручную.
-            signal(SIGUSR2) { _ in
-                let ok = PlaudAX.stopRecording(logsDirectory: Settings.plaudLogsDir)
-                Log.info("SIGUSR2 stopRecording -> \(ok)")
+            // Отладка: kill -USR2 <pid> → стоп записи. DispatchSource, а не signal():
+            // обработчик выполняется на main, а не в небезопасном async-signal контексте.
+            signal(SIGUSR2, SIG_IGN)
+            let src = DispatchSource.makeSignalSource(signal: SIGUSR2, queue: .main)
+            src.setEventHandler {
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let ok = PlaudAX.stopRecording(logsDirectory: Settings.plaudLogsDir)
+                    Log.info("SIGUSR2 stopRecording -> \(ok)")
+                }
             }
-        }
+            src.resume()
+            sigusr2Source = src
 
-        if ProcessInfo.processInfo.environment["CALLCATCH_DEBUG"] == "1",
-           CommandLine.arguments.contains("--test-bubble") {
-            // Отладка: показать бабл без реального звонка.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
-                self?.appState.callStarted(app: .telegram)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 15) {
-                    self?.appState.callEnded(app: .telegram)
+            if CommandLine.arguments.contains("--test-bubble") {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+                    self?.appState.callStarted(app: .telegram)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 15) {
+                        self?.appState.callEnded(app: .telegram)
+                    }
                 }
             }
         }
@@ -104,18 +121,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate {
     }
 
     func menuChanged(status: MenuStatus, canRecordNow: Bool, canStopNow: Bool) {
-        // Отсутствие user_id перекрывает обычный статус (иконка «нужно внимание»).
+        // Приоритет подсказок: нет user_id (детект работает, но старт не сможет) >
+        // нет Accessibility (детект/старт работают, но стоп сведётся к fallback).
         if settings.userId == nil {
             menuBar.update(status: .needsAttention(Self.userIdMissingMessage),
                            canRecordNow: false, canStopNow: canStopNow)
+        } else if !PlaudAX.isTrusted {
+            menuBar.update(status: .needsAttention(Self.axMissingMessage),
+                           canRecordNow: canRecordNow, canStopNow: canStopNow)
         } else {
             menuBar.update(status: status, canRecordNow: canRecordNow, canStopNow: canStopNow)
         }
     }
 }
 
-// Диагностические CLI-режимы (запуск бинарника напрямую, без меню-бар апп).
-// Работают только из подписанной /Applications-сборки, где есть AX-доверие.
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate

@@ -18,7 +18,11 @@ final class PlaudController: PlaudControlling {
     }
 
     func sendStartDeepLink() {
+        // Валидация 32-hex перед вставкой в URL: user_id из логов всегда такой,
+        // но Settings/UserDefaults могли получить произвольную строку — не даём
+        // проникнуть &/=/# в plaud:// URL.
         guard let id = userId(),
+              id.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil,
               let url = URL(string: "plaud://record?auto=1&user_id=\(id)") else { return }
         NSWorkspace.shared.open(url)
     }

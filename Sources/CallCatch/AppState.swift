@@ -9,6 +9,7 @@ enum BubbleState: Equatable {
     case callEndedOfferStop(app: WatchedApp)
     case stopping
     case stopped
+    case stopFailed // автостоп не удался — предложить открыть Plaud и остановить вручную
 }
 
 enum MenuStatus: Equatable {
@@ -46,6 +47,10 @@ final class AppState: CallEventDelegate {
     private let plaud: PlaudControlling
     private let autoRecord: () -> Bool
     private let userIdAvailable: () -> Bool
+    /// Держит ли приложение микрофон ПРЯМО СЕЙЧАС (не в окне дебаунса конца звонка).
+    /// Нужно, чтобы авто-старт через 7 сек не срабатывал на коротком голосовом,
+    /// которое уже отпустило микрофон, но ещё числится «активным» из-за дебаунса.
+    private let micCurrentlyActive: (WatchedApp) -> Bool
     private let scheduler: (TimeInterval, @escaping () -> Void) -> Cancellable
     weak var delegate: AppStateDelegate?
 
@@ -64,11 +69,23 @@ final class AppState: CallEventDelegate {
     init(plaud: PlaudControlling,
          autoRecord: @escaping () -> Bool,
          userIdAvailable: @escaping () -> Bool = { true },
+         micCurrentlyActive: @escaping (WatchedApp) -> Bool = { _ in true },
          scheduler: @escaping (TimeInterval, @escaping () -> Void) -> Cancellable) {
         self.plaud = plaud
         self.autoRecord = autoRecord
         self.userIdAvailable = userIdAvailable
+        self.micCurrentlyActive = micCurrentlyActive
         self.scheduler = scheduler
+    }
+
+    /// Запланировать авто-старт через 7 сек, если он включён и уместен.
+    private func scheduleAutoRecord(_ app: WatchedApp) {
+        guard lease == .idle, userIdAvailable(), autoRecord() else { return }
+        autoTimers[app] = scheduler(7.0) { [weak self] in
+            guard let self, self.activeCalls.contains(app), self.lease == .idle,
+                  self.micCurrentlyActive(app) else { return }
+            self.beginStart(owner: app)
+        }
     }
 
     // MARK: - События звонков (CallEventDelegate)
@@ -77,12 +94,7 @@ final class AppState: CallEventDelegate {
         Log.debug("AppState: callStarted(\(app.rawValue)) lease=\(lease)")
         activeCalls.append(app)
         bubble = .callDetected(app: app, recordDisabledReason: recordDisabledReason())
-        if lease == .idle, userIdAvailable(), autoRecord() {
-            autoTimers[app] = scheduler(7.0) { [weak self] in
-                guard let self, self.activeCalls.contains(app), self.lease == .idle else { return }
-                self.beginStart(owner: app)
-            }
-        }
+        scheduleAutoRecord(app)
         pushMenu()
     }
 
@@ -134,16 +146,26 @@ final class AppState: CallEventDelegate {
                 self.bubble = .stopped
                 self.scheduleBubbleAutoHide(2)
             } else {
-                // Fallback: поднять окно Plaud; флаг снимет AX-поллинг после ручного стопа.
+                // Fallback: поднять окно Plaud и явно сказать пользователю остановить
+                // вручную (не прятать бабл молча). Флаг снимет AX-поллинг после стопа.
                 self.plaud.openPlaudWindow()
-                self.bubble = .hidden
+                self.bubble = .stopFailed
+                self.scheduleBubbleAutoHide(60)
                 self.startAXWatch()
             }
             self.pushMenu()
         }
     }
 
+    /// Внешний триггер перерисовать меню (например, после «Найти user_id заново»).
+    func refreshMenu() { pushMenu() }
+
     func dismissTapped() {
+        // ✕ на бабле звонка = «не записывать этот звонок» — отменяем отложенный
+        // авто-старт, иначе запись всё равно стартанёт через 7 сек.
+        if case .callDetected(let app, _) = bubble {
+            autoTimers.removeValue(forKey: app)?.cancel()
+        }
         bubble = .hidden
     }
 
@@ -165,14 +187,16 @@ final class AppState: CallEventDelegate {
     /// Дёргается извне раз в секунду.
     func tickPollStart() {
         // Сверка с реальностью: запись могли остановить в самом Plaud (ручной стоп,
-        // авто-стоп его собственного детектора, выход из приложения) — lease не
-        // должен оставаться «занят» после внешнего стопа.
-        if case .confirmed = lease, !stopInFlight, plaud.pollRecordingStopped() {
-            Log.info("AppState: recording stopped externally (Plaud log), releasing lease")
-            if case .callEndedOfferStop = bubble { bubble = .hidden }
-            releaseLease()
-            pushMenu()
-            return
+        // авто-стоп его детектора, выход из приложения) ИЛИ Plaud мог выйти/упасть.
+        // Без этого lease завис бы .confirmed навсегда, блокируя все будущие записи.
+        if case .confirmed = lease, !stopInFlight {
+            if plaud.pollRecordingStopped() || !plaud.isPlaudRunning() {
+                Log.info("AppState: recording ended externally (stop or Plaud gone), releasing lease")
+                if case .callEndedOfferStop = bubble { bubble = .hidden }
+                releaseLease()
+                pushMenu()
+                return
+            }
         }
         guard case .pending(let owner, _) = lease else { return }
         switch plaud.pollStartOutcome() {
@@ -233,12 +257,7 @@ final class AppState: CallEventDelegate {
         lease = .idle
         guard reoffer, let app = activeCalls.last else { return }
         bubble = .callDetected(app: app, recordDisabledReason: recordDisabledReason())
-        if userIdAvailable(), autoRecord() {
-            autoTimers[app] = scheduler(7.0) { [weak self] in
-                guard let self, self.activeCalls.contains(app), self.lease == .idle else { return }
-                self.beginStart(owner: app)
-            }
-        }
+        scheduleAutoRecord(app)
     }
 
     private func recordDisabledReason() -> String? {

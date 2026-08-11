@@ -26,14 +26,15 @@ PLIST
 # Подпись сертификатом Apple Development (стабильная identity: TCC-разрешения
 # — Accessibility и т.п. — сохраняются между пересборками, т.к. designated
 # requirement привязан к team ID + bundle id, а не к хэшу бинарника).
-# Переопределяется через CODESIGN_IDENTITY; ad-hoc ("-") как запасной вариант.
-IDENTITY="${CODESIGN_IDENTITY:-Apple Development: Aleksandar Radoslavov (NJZL3R3488)}"
-if security find-identity -v -p codesigning | grep -qF "$IDENTITY"; then
+# По умолчанию — первый Apple Development в связке ключей (переносимо между
+# машинами с тем же Apple ID); override через CODESIGN_IDENTITY; ad-hoc fallback.
+IDENTITY="${CODESIGN_IDENTITY:-$(security find-identity -v -p codesigning | sed -n 's/.*"\(Apple Development: .*\)"/\1/p' | head -1)}"
+if [ -n "$IDENTITY" ] && security find-identity -v -p codesigning | grep -qF "$IDENTITY"; then
     codesign -s "$IDENTITY" --force --options runtime "$APP"
     echo "Built $APP (signed: $IDENTITY)"
 else
     codesign -s - --force "$APP"
-    echo "Built $APP (ad-hoc — '$IDENTITY' not found in keychain)"
+    echo "Built $APP (ad-hoc — no Apple Development identity in keychain)"
 fi
 
 # INSTALL=1 — переустановить в /Applications (постоянное место; стабильная

@@ -21,6 +21,13 @@ final class Settings {
     @discardableResult
     func ensureUserId() -> Bool {
         if userId != nil { return true }
+        return rescanUserId()
+    }
+
+    /// Принудительно перечитать user_id из логов (для пункта «Найти заново» —
+    /// работает и когда id уже задан, но устарел после смены аккаунта).
+    @discardableResult
+    func rescanUserId() -> Bool {
         if let id = UserIdExtractor.findInPlaudLogs(directory: Self.plaudLogsDir) {
             userId = id
             return true

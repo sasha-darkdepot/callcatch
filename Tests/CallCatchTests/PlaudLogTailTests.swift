@@ -60,6 +60,40 @@ final class PlaudLogTailTests: XCTestCase {
         XCTAssertEqual(tail.poll(since: cp), .success(recordingId: "99"))
     }
 
+    func testTruncatedFileReadsFromStart() { // ревью: ротация/обрезка не ослепляет
+        write("early startRecording by scene success recordingId=1\n")
+        let tail = makeTail()
+        let cp = tail.checkpoint() // offset = текущий размер
+        // Файл обрезан до 0 и переписан новой строкой (offset > нового размера):
+        let url = dir.appendingPathComponent(todayName)
+        try! "startRecording by scene success recordingId=777\n".data(using: .utf8)!.write(to: url)
+        XCTAssertEqual(tail.poll(since: cp), .success(recordingId: "777"))
+    }
+
+    func testSuccessWithoutRecordingIdStillDetected() { // ревью: recordingId опционален
+        let tail = makeTail()
+        let cp = tail.checkpoint()
+        write("2026-08-11 [INFO] startRecording by scene success scene=web\n")
+        XCTAssertEqual(tail.poll(since: cp), .success(recordingId: ""))
+    }
+
+    func testFatalRejectionWinsOverEarlierNotAvailable() { // ревью: не маскировать фатальный
+        let tail = makeTail()
+        let cp = tail.checkpoint()
+        write("recording_start_rejected reason=not_available\nrecording_start_rejected reason=user_mismatch\n")
+        XCTAssertEqual(tail.poll(since: cp), .rejected(reason: "user_mismatch"))
+    }
+
+    func testInvalidUTF8ByteDoesNotBlankBuffer() { // ревью: lossy-декод
+        let tail = makeTail()
+        let cp = tail.checkpoint()
+        let url = dir.appendingPathComponent(todayName)
+        var data = Data([0xFF, 0xFE]) // битые байты
+        data.append("startRecording by scene success recordingId=9\n".data(using: .utf8)!)
+        try! data.write(to: url)
+        XCTAssertEqual(tail.poll(since: cp), .success(recordingId: "9"))
+    }
+
     func testChecksTodayFileWhenCheckpointWasYesterday() {
         // checkpoint взят "вчера", результат пришёл в сегодняшний файл (полночь между стартом и подтверждением)
         let yesterdayName = "log-2026-08-10.log"
