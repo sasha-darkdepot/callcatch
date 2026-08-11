@@ -75,7 +75,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate {
         RunLoop.main.add(poll, forMode: .common)
         pollTimer = poll
 
-        Log.info("CallCatch started; userId=\(settings.userId.map { String($0.prefix(6)) + "…" } ?? "nil")")
+        Log.info("CallCatch started; userId=\(settings.userId.map { String($0.prefix(6)) + "…" } ?? "nil"); axTrusted=\(AXIsProcessTrusted())")
+
+        // Диагностика: kill -USR2 <pid> → выполнить стоп записи вручную (для тестов).
+        signal(SIGUSR2) { _ in
+            let ok = PlaudAX.stopRecording(logsDirectory: Settings.plaudLogsDir)
+            Log.info("SIGUSR2 stopRecording -> \(ok)")
+        }
 
         if CommandLine.arguments.contains("--test-bubble") {
             // Диагностический режим: показать бабл без реального звонка.
@@ -106,6 +112,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate {
     }
 }
 
+// Диагностические CLI-режимы (запуск бинарника напрямую, без меню-бар апп).
+// Работают только из подписанной /Applications-сборки, где есть AX-доверие.
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate

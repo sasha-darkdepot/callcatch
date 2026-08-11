@@ -56,12 +56,13 @@ final class PlaudController: PlaudControlling {
 
     func performAXStop(completion: @escaping (Bool) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
-            let ok = PlaudAX.pressStopAndVerify()
+            let ok = PlaudAX.stopRecording(logsDirectory: Settings.plaudLogsDir)
             DispatchQueue.main.async { completion(ok) }
         }
     }
 
     func isRecordingVisibleViaAX() -> Bool? {
-        PlaudAX.isRecordingVisible()
+        guard isPlaudRunning() else { return nil }
+        return PlaudAX.isRecordingWidgetVisible()
     }
 }
