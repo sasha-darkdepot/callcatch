@@ -9,6 +9,7 @@ final class MicMonitor {
     private var knownProcesses: [AudioObjectID: pid_t] = [:]
     private var listenerBlocks: [AudioObjectID: AudioObjectPropertyListenerBlock] = [:]
     private var lastReportedInput: [AudioObjectID: Bool] = [:]
+    private var seenUnwatched: Set<AudioObjectID> = []
     private var pollTimer: Timer?
     private let queue = DispatchQueue.main
 
@@ -68,9 +69,10 @@ final class MicMonitor {
             let pid = readPID(obj)
             guard pid > 0 else { continue }
             guard let app = watchedApp(for: obj, pid: pid) else {
-                // Диагностика: видеть, каким процессом приложение реально пользуется.
-                let bundle = readBundleID(obj)
-                Log.info("MicMonitor: new unwatched obj=\(obj) pid=\(pid) bundle=\(bundle)")
+                // Диагностика (однократно на объект): чем приложение реально пользуется.
+                if seenUnwatched.insert(obj).inserted {
+                    Log.info("MicMonitor: new unwatched obj=\(obj) pid=\(pid) bundle=\(readBundleID(obj))")
+                }
                 continue
             }
             knownProcesses[obj] = pid

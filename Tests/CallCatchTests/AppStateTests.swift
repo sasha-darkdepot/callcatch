@@ -12,6 +12,7 @@ final class MockPlaud: PlaudControlling {
     var axRecordingVisible: Bool? = false
     var axStopAsync = false
     var pendingStopCompletions: [(Bool) -> Void] = []
+    var recordingStoppedExternally = false
 
     func sendStartDeepLink() { deepLinksSent += 1 }
     func openPlaudWindow() { openedWindow += 1 }
@@ -23,6 +24,10 @@ final class MockPlaud: PlaudControlling {
         if axStopAsync { pendingStopCompletions.append(completion) } else { completion(axStopResult) }
     }
     func isRecordingVisibleViaAX() -> Bool? { axRecordingVisible }
+    func pollRecordingStopped() -> Bool {
+        if recordingStoppedExternally { recordingStoppedExternally = false; return true }
+        return false
+    }
 }
 
 final class StateLog: AppStateDelegate {
@@ -281,6 +286,24 @@ final class AppStateTests: XCTestCase {
         scheduler.fireAll(delay: 7.0)
         XCTAssertEqual(plaud.deepLinksSent, 0)
         _ = s
+    }
+
+    func testExternalStopReleasesLeaseAndReoffers() { // стоп руками в Plaud
+        let s = makeRecordingState()          // discord пишет (звонок ещё идёт)
+        plaud.recordingStoppedExternally = true
+        s.tickPollStart()
+        XCTAssertFalse(log.menu.last!.canStop)
+        XCTAssertTrue(log.menu.last!.canRecord) // звонок идёт — можно записать заново
+        XCTAssertTrue(log.bubbles.contains(.callDetected(app: .discord, recordDisabledReason: nil)))
+    }
+
+    func testExternalStopHidesOfferStopBubble() {
+        let s = makeRecordingState()
+        s.callEnded(app: .discord)            // бабл «Остановить запись» висит
+        plaud.recordingStoppedExternally = true
+        s.tickPollStart()                     // юзер остановил в самом Plaud
+        XCTAssertEqual(log.bubbles.last, .hidden)
+        XCTAssertFalse(log.menu.last!.canStop)
     }
 
     func testReofferAfterStopWithOngoingSecondCall() { // re-offer после освобождения lease

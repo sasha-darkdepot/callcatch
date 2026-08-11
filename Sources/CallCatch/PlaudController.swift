@@ -5,6 +5,7 @@ final class PlaudController: PlaudControlling {
     private let logTail: PlaudLogTail
     private let userId: () -> String?
     private var checkpointValue: LogCheckpoint?
+    private var stopWatchCheckpoint: LogCheckpoint?
 
     init(logTail: PlaudLogTail, userId: @escaping () -> String?) {
         self.logTail = logTail
@@ -13,6 +14,7 @@ final class PlaudController: PlaudControlling {
 
     func makeCheckpoint() {
         checkpointValue = logTail.checkpoint()
+        stopWatchCheckpoint = nil
     }
 
     func sendStartDeepLink() {
@@ -35,7 +37,21 @@ final class PlaudController: PlaudControlling {
 
     func pollStartOutcome() -> StartOutcome? {
         guard let cp = checkpointValue else { return nil }
-        return logTail.poll(since: cp)
+        let outcome = logTail.poll(since: cp)
+        if case .success = outcome {
+            // С этого места следим за стопом (ручным в Plaud, авто или при выходе).
+            stopWatchCheckpoint = logTail.checkpoint()
+        }
+        return outcome
+    }
+
+    func pollRecordingStopped() -> Bool {
+        guard let cp = stopWatchCheckpoint else { return false }
+        if logTail.containsLine("stopRecording by scene", since: cp) {
+            stopWatchCheckpoint = nil
+            return true
+        }
+        return false
     }
 
     func performAXStop(completion: @escaping (Bool) -> Void) {

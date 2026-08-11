@@ -56,6 +56,16 @@ final class PlaudLogTail {
         return nil
     }
 
+    /// Появилась ли строка с подстрокой после checkpoint (для детекта внешнего стопа).
+    func containsLine(_ needle: String, since cp: LogCheckpoint) -> Bool {
+        var chunks: [String] = [read(url: cp.fileURL, from: cp.offset)]
+        let today = todayLogURL()
+        if today != cp.fileURL {
+            chunks.append(read(url: today, from: 0))
+        }
+        return chunks.joined(separator: "\n").contains(needle)
+    }
+
     private func read(url: URL, from offset: UInt64) -> String {
         guard let h = try? FileHandle(forReadingFrom: url) else { return "" }
         defer { try? h.close() }

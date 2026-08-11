@@ -23,6 +23,7 @@ protocol PlaudControlling: AnyObject {
     func openPlaudWindow()
     func isPlaudRunning() -> Bool
     func pollStartOutcome() -> StartOutcome?
+    func pollRecordingStopped() -> Bool
     func makeCheckpoint()
     func performAXStop(completion: @escaping (Bool) -> Void)
     func isRecordingVisibleViaAX() -> Bool?
@@ -161,8 +162,18 @@ final class AppState: CallEventDelegate {
         pushMenu()
     }
 
-    /// Дёргается извне раз в секунду; вне pending — no-op.
+    /// Дёргается извне раз в секунду.
     func tickPollStart() {
+        // Сверка с реальностью: запись могли остановить в самом Plaud (ручной стоп,
+        // авто-стоп его собственного детектора, выход из приложения) — lease не
+        // должен оставаться «занят» после внешнего стопа.
+        if case .confirmed = lease, !stopInFlight, plaud.pollRecordingStopped() {
+            Log.info("AppState: recording stopped externally (Plaud log), releasing lease")
+            if case .callEndedOfferStop = bubble { bubble = .hidden }
+            releaseLease()
+            pushMenu()
+            return
+        }
         guard case .pending(let owner, _) = lease else { return }
         switch plaud.pollStartOutcome() {
         case .success(let rid):

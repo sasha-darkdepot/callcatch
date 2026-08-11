@@ -81,6 +81,9 @@ struct BubbleView: View {
                 Button("Записать в Plaud", action: onRecord)
                     .disabled(disabledReason != nil)
                     .help(disabledReason ?? "")
+                if let reason = disabledReason {
+                    Text(reason).font(.caption).foregroundStyle(.secondary)
+                }
                 dismissButton
             case let .starting(_, launching):
                 ProgressView().controlSize(.small)
