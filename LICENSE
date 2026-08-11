@@ -1,0 +1,12 @@
+Copyright (c) 2026 Sasha
+
+All rights reserved.
+
+This is a personal, internal-use project. It is not licensed for
+redistribution or use by others. The source is published in a private
+repository for the author's own convenience.
+
+CallCatch is an independent tool and is not affiliated with, endorsed by,
+or supported by PLAUD LLC. "Plaud" is a trademark of its respective owner.
+CallCatch interacts with the locally installed Plaud desktop application
+through its public URL scheme and the macOS Accessibility API only.
