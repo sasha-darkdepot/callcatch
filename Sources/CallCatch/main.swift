@@ -77,16 +77,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate {
 
         Log.info("CallCatch started; userId=\(settings.userId.map { String($0.prefix(6)) + "…" } ?? "nil"); axTrusted=\(AXIsProcessTrusted())")
 
-        // Диагностика: kill -USR2 <pid> → выполнить стоп записи вручную (для тестов).
-        signal(SIGUSR2) { _ in
-            let ok = PlaudAX.stopRecording(logsDirectory: Settings.plaudLogsDir)
-            Log.info("SIGUSR2 stopRecording -> \(ok)")
+        if ProcessInfo.processInfo.environment["CALLCATCH_DEBUG"] == "1" {
+            // Отладка: kill -USR2 <pid> → выполнить стоп записи вручную.
+            signal(SIGUSR2) { _ in
+                let ok = PlaudAX.stopRecording(logsDirectory: Settings.plaudLogsDir)
+                Log.info("SIGUSR2 stopRecording -> \(ok)")
+            }
         }
 
-        if CommandLine.arguments.contains("--test-bubble") {
-            // Диагностический режим: показать бабл без реального звонка.
+        if ProcessInfo.processInfo.environment["CALLCATCH_DEBUG"] == "1",
+           CommandLine.arguments.contains("--test-bubble") {
+            // Отладка: показать бабл без реального звонка.
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
-                Log.info("TEST: simulating callStarted(telegram)")
                 self?.appState.callStarted(app: .telegram)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 15) {
                     self?.appState.callEnded(app: .telegram)

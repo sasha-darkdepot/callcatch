@@ -74,7 +74,7 @@ final class AppState: CallEventDelegate {
     // MARK: - События звонков (CallEventDelegate)
 
     func callStarted(app: WatchedApp) {
-        Log.info("AppState: callStarted(\(app.rawValue)) lease=\(lease)")
+        Log.debug("AppState: callStarted(\(app.rawValue)) lease=\(lease)")
         activeCalls.append(app)
         bubble = .callDetected(app: app, recordDisabledReason: recordDisabledReason())
         if lease == .idle, userIdAvailable(), autoRecord() {
@@ -87,7 +87,7 @@ final class AppState: CallEventDelegate {
     }
 
     func callEnded(app: WatchedApp) {
-        Log.info("AppState: callEnded(\(app.rawValue)) lease=\(lease)")
+        Log.debug("AppState: callEnded(\(app.rawValue)) lease=\(lease)")
         activeCalls.removeAll { $0 == app }
         autoTimers.removeValue(forKey: app)?.cancel()
         switch lease {
@@ -155,7 +155,7 @@ final class AppState: CallEventDelegate {
         plaud.sendStartDeepLink()
         lease = .pending(owner: owner, generation: generation)
         bubble = .starting(app: owner, launchingPlaud: !plaud.isPlaudRunning())
-        Log.info("AppState: beginStart(\(owner.rawValue)) gen=\(generation)")
+        Log.debug("AppState: beginStart(\(owner.rawValue)) gen=\(generation)")
         scheduleRetry()
         let gen = generation
         startDeadlineTimer = scheduler(60.0) { [weak self] in self?.startTimedOut(gen: gen) }
@@ -258,7 +258,7 @@ final class AppState: CallEventDelegate {
                 let visible = self.plaud.isRecordingVisibleViaAX()
                 // Plaud выключен => запись точно не идёт; nil при живом Plaud — неопределимо.
                 if visible == false || !self.plaud.isPlaudRunning() {
-                    Log.info("AppState: AX watch — recording gone, releasing lease")
+                    Log.debug("AppState: AX watch — recording gone, releasing lease")
                     self.releaseLease()
                     self.pushMenu()
                 } else if ticks < 30 {
@@ -266,7 +266,7 @@ final class AppState: CallEventDelegate {
                 } else {
                     // Исчерпание наблюдения не должно навсегда блокировать новые записи:
                     // освобождение lease не трогает запись, лишь разрешает старты.
-                    Log.info("AppState: AX watch exhausted, releasing lease anyway")
+                    Log.debug("AppState: AX watch exhausted, releasing lease anyway")
                     self.releaseLease()
                     self.pushMenu()
                 }

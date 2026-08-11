@@ -3,8 +3,8 @@ import XCTest
 
 final class UserIdExtractorTests: XCTestCase {
     func testExtractsFromUserIdJSONField() {
-        let log = #"2026-08-07 10:00:00 [INFO] upload {"userId":"4e234a9b465e42628745f5f41ba898bf","x":1}"#
-        XCTAssertEqual(UserIdExtractor.extract(fromLogText: log), "4e234a9b465e42628745f5f41ba898bf")
+        let log = #"2026-08-07 10:00:00 [INFO] upload {"userId":"0123456789abcdef0123456789abcdef","x":1}"#
+        XCTAssertEqual(UserIdExtractor.extract(fromLogText: log), "0123456789abcdef0123456789abcdef")
     }
 
     func testExtractsFromDeepLinkParam() {

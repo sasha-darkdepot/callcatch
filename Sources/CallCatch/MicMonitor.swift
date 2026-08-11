@@ -56,7 +56,7 @@ final class MicMonitor {
 
         let current = Set(ids)
         for (obj, pid) in knownProcesses where !current.contains(obj) {
-            Log.info("MicMonitor: process gone obj=\(obj) pid=\(pid)")
+            Log.debug("MicMonitor: process gone obj=\(obj) pid=\(pid)")
             tracker.processTerminated(pid: pid)
             if let block = listenerBlocks.removeValue(forKey: obj) {
                 var inputAddr = Self.addr(kAudioProcessPropertyIsRunningInput)
@@ -71,7 +71,7 @@ final class MicMonitor {
             guard let app = watchedApp(for: obj, pid: pid) else {
                 // Диагностика (однократно на объект): чем приложение реально пользуется.
                 if seenUnwatched.insert(obj).inserted {
-                    Log.info("MicMonitor: new unwatched obj=\(obj) pid=\(pid) bundle=\(readBundleID(obj))")
+                    Log.debug("MicMonitor: new unwatched obj=\(obj) pid=\(pid) bundle=\(readBundleID(obj))")
                 }
                 continue
             }
@@ -82,7 +82,7 @@ final class MicMonitor {
             listenerBlocks[obj] = block
             var inputAddr = Self.addr(kAudioProcessPropertyIsRunningInput)
             let err = AudioObjectAddPropertyListenerBlock(obj, &inputAddr, queue, block)
-            Log.info("MicMonitor: watching \(app.rawValue) pid=\(pid) obj=\(obj) listenerErr=\(err)")
+            Log.debug("MicMonitor: watching \(app.rawValue) pid=\(pid) obj=\(obj) listenerErr=\(err)")
             inputStateChanged(obj)
         }
     }
@@ -92,7 +92,7 @@ final class MicMonitor {
         let running = readIsRunningInput(obj)
         if lastReportedInput[obj] != running {
             lastReportedInput[obj] = running
-            Log.info("MicMonitor: \(app.rawValue) pid=\(pid) input=\(running)")
+            Log.debug("MicMonitor: \(app.rawValue) pid=\(pid) input=\(running)")
         }
         tracker.micStateChanged(pid: pid, app: app, isRunningInput: running)
     }
