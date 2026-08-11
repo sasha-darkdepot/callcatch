@@ -46,7 +46,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate {
                 PlaudAX.requestPermission() // ранний запрос AX-доверия (понадобится для стопа)
                 self?.appState.recordTapped()
             },
-            onStop: { [weak self] in self?.appState.stopTapped() },
+            onStop: { [weak self] in
+                PlaudAX.requestPermission() // промпт Accessibility, если ещё не выдано
+                self?.appState.stopTapped()
+            },
             onOpenPlaud: { [weak self] in self?.plaudController.openPlaudWindow() },
             onDismiss: { [weak self] in self?.appState.dismissTapped() }
         )
@@ -55,7 +58,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate {
                               PlaudAX.requestPermission()
                               self?.appState.recordTapped()
                           },
-                          onStop: { [weak self] in self?.appState.stopTapped() })
+                          onStop: { [weak self] in
+                              PlaudAX.requestPermission()
+                              self?.appState.stopTapped()
+                          })
 
         let tracker = PIDTracker(endDebounce: 5.0, scheduler: schedule)
         tracker.delegate = appState
