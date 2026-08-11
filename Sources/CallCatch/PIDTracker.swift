@@ -21,6 +21,7 @@ final class PIDTracker {
     private var pidApp: [pid_t: WatchedApp] = [:]
     private var endTimers: [WatchedApp: Cancellable] = [:]
     private var callActive: Set<WatchedApp> = []
+    private var pidInputState: [pid_t: Bool] = [:]
 
     init(endDebounce: TimeInterval,
          scheduler: @escaping (TimeInterval, @escaping () -> Void) -> Cancellable) {
@@ -29,6 +30,10 @@ final class PIDTracker {
     }
 
     func micStateChanged(pid: pid_t, app: WatchedApp, isRunningInput: Bool) {
+        // Идемпотентность: поллинг и листенеры могут доставлять одно состояние
+        // многократно; повторный false не должен сбрасывать дебаунс конца звонка.
+        if pidInputState[pid] == isRunningInput { return }
+        pidInputState[pid] = isRunningInput
         if isRunningInput {
             pidApp[pid] = app
             activePIDs[app, default: []].insert(pid)
@@ -43,6 +48,7 @@ final class PIDTracker {
     }
 
     func processTerminated(pid: pid_t) {
+        pidInputState.removeValue(forKey: pid)
         guard let app = pidApp[pid] else { return }
         release(pid: pid, app: app)
     }

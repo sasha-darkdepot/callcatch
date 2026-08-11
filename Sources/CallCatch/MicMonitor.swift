@@ -8,6 +8,8 @@ final class MicMonitor {
     private let tracker: PIDTracker
     private var knownProcesses: [AudioObjectID: pid_t] = [:]
     private var listenerBlocks: [AudioObjectID: AudioObjectPropertyListenerBlock] = [:]
+    private var lastReportedInput: [AudioObjectID: Bool] = [:]
+    private var pollTimer: Timer?
     private let queue = DispatchQueue.main
 
     init(tracker: PIDTracker) {
@@ -29,6 +31,16 @@ final class MicMonitor {
         let err = AudioObjectAddPropertyListenerBlock(systemObj, &listAddr, queue, listBlock)
         Log.info("MicMonitor: start, list listener err=\(err)")
         refreshProcessList()
+        // Поллинг-фоллбэк: листенеры IsRunningInput на практике срабатывают не для
+        // всех приложений — раз в 3 сек пересканируем список и опрашиваем состояние
+        // наблюдаемых процессов сами (дёшево: несколько property-читов).
+        let t = Timer(timeInterval: 3.0, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            self.refreshProcessList()
+            for obj in self.knownProcesses.keys { self.inputStateChanged(obj) }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        pollTimer = t
     }
 
     private func refreshProcessList() {
@@ -43,16 +55,24 @@ final class MicMonitor {
 
         let current = Set(ids)
         for (obj, pid) in knownProcesses where !current.contains(obj) {
+            Log.info("MicMonitor: process gone obj=\(obj) pid=\(pid)")
             tracker.processTerminated(pid: pid)
             if let block = listenerBlocks.removeValue(forKey: obj) {
                 var inputAddr = Self.addr(kAudioProcessPropertyIsRunningInput)
                 AudioObjectRemovePropertyListenerBlock(obj, &inputAddr, queue, block)
             }
             knownProcesses.removeValue(forKey: obj)
+            lastReportedInput.removeValue(forKey: obj)
         }
         for obj in ids where knownProcesses[obj] == nil {
             let pid = readPID(obj)
-            guard pid > 0, let app = watchedApp(for: obj, pid: pid) else { continue }
+            guard pid > 0 else { continue }
+            guard let app = watchedApp(for: obj, pid: pid) else {
+                // Диагностика: видеть, каким процессом приложение реально пользуется.
+                let bundle = readBundleID(obj)
+                Log.info("MicMonitor: new unwatched obj=\(obj) pid=\(pid) bundle=\(bundle)")
+                continue
+            }
             knownProcesses[obj] = pid
             let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
                 self?.queue.async { self?.inputStateChanged(obj) }
@@ -68,7 +88,10 @@ final class MicMonitor {
     private func inputStateChanged(_ obj: AudioObjectID) {
         guard let pid = knownProcesses[obj], let app = watchedApp(for: obj, pid: pid) else { return }
         let running = readIsRunningInput(obj)
-        Log.info("MicMonitor: \(app.rawValue) pid=\(pid) input=\(running)")
+        if lastReportedInput[obj] != running {
+            lastReportedInput[obj] = running
+            Log.info("MicMonitor: \(app.rawValue) pid=\(pid) input=\(running)")
+        }
         tracker.micStateChanged(pid: pid, app: app, isRunningInput: running)
     }
 

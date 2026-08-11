@@ -61,6 +61,20 @@ final class PIDTrackerTests: XCTestCase {
         XCTAssertEqual(log.events, ["start:discord", "start:telegram", "end:discord"])
     }
 
+    func testRepeatedFalseFromPollingDoesNotResetDebounce() {
+        // Поллинг шлёт одно и то же состояние каждые 3 сек: повторные false
+        // не должны пересоздавать таймер дебаунса (иначе конец звонка не наступит).
+        let t = makeTracker()
+        t.micStateChanged(pid: 100, app: .discord, isRunningInput: true)
+        t.micStateChanged(pid: 100, app: .discord, isRunningInput: false)
+        let timersAfterFirstRelease = scheduler.timers.count
+        t.micStateChanged(pid: 100, app: .discord, isRunningInput: false)
+        t.micStateChanged(pid: 100, app: .discord, isRunningInput: false)
+        XCTAssertEqual(scheduler.timers.count, timersAfterFirstRelease)
+        scheduler.fireAll(delay: 5.0)
+        XCTAssertEqual(log.events, ["start:discord", "end:discord"])
+    }
+
     func testDuplicateReleaseDoesNotDoubleEnd() {
         let t = makeTracker()
         t.micStateChanged(pid: 100, app: .discord, isRunningInput: true)
