@@ -39,14 +39,24 @@ final class BubbleWindow {
             state: state, onRecord: onRecord, onStop: onStop,
             onOpenPlaud: onOpenPlaud, onDismiss: onDismiss))
         let capsule = NSGlassEffectView()
-        capsule.style = .clear
+        // .regular — по HIG: clear только над media-rich контентом и с dimming-слоем;
+        // бабл висит над произвольным десктопом. Прозрачность regular-стекла юзер
+        // задаёт системным слайдером (macOS 27: Settings → Appearance → Liquid Glass).
+        capsule.style = .regular
         capsule.cornerRadius = 999 // капсула
         capsule.contentView = row
+        // macOS 27: интерактивный отклик стекла (пружинит при клике) — рекомендовано
+        // для glass-контейнеров с контролами. Через KVC, пока baseline-SDK 26.x;
+        // заменить на типизированный effectIsInteractive при переходе на Xcode 27.
+        if #available(macOS 27.0, *),
+           capsule.responds(to: Selector(("setEffectIsInteractive:"))) {
+            capsule.setValue(true, forKey: "effectIsInteractive")
+        }
 
         var arranged: [NSView] = []
         if case let .callDetected(_, .some(reason)) = state {
             let pill = NSGlassEffectView()
-            pill.style = .clear
+            pill.style = .regular // варианты не миксуются (HIG)
             pill.cornerRadius = 999
             pill.contentView = NSHostingView(rootView: BubbleCaptionView(text: reason))
             arranged.append(pill)
