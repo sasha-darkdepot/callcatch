@@ -97,7 +97,11 @@ re-verifying against live Plaud.
 
 ## Releasing
 
-Version is git-derived: `build-app.sh` reads the marketing version from the
-latest `vX.Y.Z` tag and the build number from the commit count. To cut a
-release: move `## [Unreleased]` in CHANGELOG to `## [X.Y.Z] — <date>`, commit,
-then `git tag vX.Y.Z && git push --tags`. The next build stamps `X.Y.Z`.
+Version is git-derived (SemVer): `build-app.sh` reads the marketing version from
+the latest `vX.Y.Z` tag and the build number from the commit count — nothing is
+hardcoded. **The one sanctioned way to release is `scripts/release.sh X.Y.Z`**:
+it runs tests, rolls CHANGELOG `[Unreleased] → [X.Y.Z]`, commits, tags, pushes,
+and installs the stamped build (refusing on a dirty/out-of-sync tree or a
+non-increasing version). Don't hand-tag or hand-edit the version — use the
+script so the version story can't drift. Accumulate changes under
+`## [Unreleased]` in CHANGELOG as you work.

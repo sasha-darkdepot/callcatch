@@ -97,6 +97,33 @@ every rebuild.
 - Verified against Plaud v1.3.7; a Plaud update may require re-checking the
   deep-link and stop behavior.
 
+## Versioning & releases
+
+CallCatch uses [Semantic Versioning](https://semver.org) — `MAJOR.MINOR.PATCH`.
+As a personal 0.x tool the bumps mean:
+
+- **PATCH** (`0.2.`**`1`**) — bug fix, nothing you'd notice differently.
+- **MINOR** (`0.`**`3`**`.0`) — a new capability or a notable behavior change.
+- **MAJOR** (**`1`**`.0.0`) — reserved for "solid, I rely on it daily" / a
+  breaking rework.
+
+**The git tag `vX.Y.Z` is the single source of truth.** The build reads the
+marketing version from the latest tag and the build number from the commit
+count — nothing is hardcoded, so the version can't drift. `CHANGELOG.md` holds
+the human story: every change lands under `## [Unreleased]` until a release
+rolls it into a dated version.
+
+**Cut a release with one command** (it runs the tests, rolls the changelog,
+commits, tags, pushes, and installs the stamped build — and refuses if the tree
+is dirty, out of sync, or the version isn't a clean bump):
+
+```bash
+scripts/release.sh 0.3.0
+```
+
+That is the only sanctioned path from "changes on `main`" to "a tagged release",
+so there is exactly one way to version and it's always followed.
+
 ## Development
 
 ```bash
