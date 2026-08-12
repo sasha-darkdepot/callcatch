@@ -143,6 +143,9 @@
   }
   .gbtn.prominent.draining .lbl { position:relative; }
   @keyframes drain { to { transform: scaleX(0); } }
+  /* pause-on-hover: пока курсор над баблом, отсчёт замирает (WCAG 2.2.1 / Discord-паттерн).
+     Класс вешает JS по mouseenter — один источник правды для CSS-заливки и таймера. */
+  .bubble.paused .gbtn.prominent.draining .fill { animation-play-state: paused; }
 
   .pulse { animation: pulse 1.6s ease-in-out infinite; }
   @keyframes pulse { 0%,100% { opacity:1; transform:scale(1);} 50% { opacity:.55; transform:scale(.88);} }
@@ -312,11 +315,30 @@ function go(name) {
 function stopFlow() { if (flowTimer) { flowTimer.forEach(clearTimeout); flowTimer = null; } }
 
 /* --- auto-stop --- */
+let autoStopRemaining = 0, autoStopStartedAt = 0;
 function enterAutoStop() {
   stopFlow(); clearAutoStop();
   render('autoStop');
-  // CSS-drain на кнопке длится 10 s; таймер синхронно доводит до stopping
-  autoStopTimer = setTimeout(() => { autoStopTimer = null; go('stopping'); }, 10000);
+  autoStopRemaining = 10000; // синхронно с CSS-drain (10 s)
+  startAutoStopTimer();
+  // Ховер ставит отсчёт на паузу: человек принимает решение —
+  // нельзя выдёргивать кнопку из-под курсора. Один триггер управляет
+  // и CSS-заливкой (класс .paused), и JS-таймером — рассинхрон исключён.
+  const b = slot.querySelector('.bubble');
+  b.addEventListener('mouseenter', () => { b.classList.add('paused'); pauseAutoStop(); });
+  b.addEventListener('mouseleave', () => { b.classList.remove('paused'); resumeAutoStop(); });
+}
+function startAutoStopTimer() {
+  autoStopStartedAt = Date.now();
+  autoStopTimer = setTimeout(() => { autoStopTimer = null; go('stopping'); }, autoStopRemaining);
+}
+function pauseAutoStop() {
+  if (!autoStopTimer) return;
+  clearTimeout(autoStopTimer); autoStopTimer = null;
+  autoStopRemaining -= Date.now() - autoStopStartedAt;
+}
+function resumeAutoStop() {
+  if (current === 'autoStop' && !autoStopTimer) startAutoStopTimer();
 }
 function clearAutoStop() { if (autoStopTimer) { clearTimeout(autoStopTimer); autoStopTimer = null; } }
 function keepRec() {
@@ -367,7 +389,7 @@ document.getElementById('clock').textContent =
 /* gallery grouped by template */
 const GROUPS = [
   ['Action — иконка + текст + главная кнопка + ✕', ['callDetected', 'callEnded', 'alreadyRecording']],
-  ['Auto-stop (новое) — красная кнопка тает 10 с: клик = стоп сейчас, дотаяла = стоп сам, ✕ = оставить запись', ['autoStop', 'keepRecording']],
+  ['Auto-stop (новое) — кнопка тает 10 с: клик = стоп сейчас, дотаяла = стоп сам, ✕ = оставить запись; ховер ставит отсчёт на паузу', ['autoStop', 'keepRecording']],
   ['Progress — спиннер + текст', ['startingPlaud', 'starting', 'stopping']],
   ['Notice — иконка + текст, сам исчезает', ['recording', 'stopped']],
   ['Error — предупреждение + Open Plaud + ✕', ['error', 'errorStop']],
