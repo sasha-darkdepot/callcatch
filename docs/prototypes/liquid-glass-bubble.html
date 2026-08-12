@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CallCatch — Liquid Glass prototype</title>
+<style>
+  :root {
+    --text: rgba(255,255,255,.92);
+    --text-dim: rgba(255,255,255,.55);
+    --glass-bg: rgba(40,40,48,.38);
+    --btn-glass: rgba(255,255,255,.14);
+    --btn-glass-hover: rgba(255,255,255,.22);
+    --red: #ff453a;
+    --green: #32d74b;
+    --yellow: #ffd60a;
+  }
+  .light {
+    --text: rgba(20,20,25,.9);
+    --text-dim: rgba(20,20,25,.5);
+    --glass-bg: rgba(255,255,255,.42);
+    --btn-glass: rgba(255,255,255,.5);
+    --btn-glass-hover: rgba(255,255,255,.75);
+    --red: #ff3b30;
+    --green: #28cd41;
+    --yellow: #b8860b;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family: -apple-system, "SF Pro Text", BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+    background:#0d0d12; color:#ddd;
+    -webkit-font-smoothing: antialiased;
+  }
+  h1 { font-size:17px; font-weight:600; color:#fff; }
+  .page { max-width:1060px; margin:0 auto; padding:28px 24px 60px; }
+  .header { display:flex; align-items:baseline; gap:12px; margin-bottom:6px; }
+  .header small { color:#8a8a93; font-size:12px; }
+  .note { color:#8a8a93; font-size:12.5px; margin-bottom:18px; line-height:1.5; }
+
+  /* ---------- controls ---------- */
+  .controls { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:14px; align-items:center; }
+  .chip {
+    font-size:12px; padding:6px 12px; border-radius:999px; cursor:pointer;
+    background:#1d1d26; color:#c9c9d1; border:1px solid #2c2c38;
+    transition:.15s;
+  }
+  .chip:hover { background:#26262f; }
+  .chip.active { background:#3a3a8f; border-color:#4c4cb8; color:#fff; }
+  .chip.play { background:#0f3d1f; border-color:#1d6b38; color:#7bec9e; }
+  .chip.play:hover { background:#145029; }
+  .spacer { flex:1; }
+
+  /* ---------- stage / wallpaper ---------- */
+  .stage {
+    position:relative; height:430px; border-radius:18px; overflow:hidden;
+    background:
+      radial-gradient(120% 90% at 15% 0%,   #35406e 0%, transparent 55%),
+      radial-gradient(110% 100% at 90% 10%, #7b3f6e 0%, transparent 50%),
+      radial-gradient(120% 110% at 60% 100%,#173a5c 0%, transparent 60%),
+      linear-gradient(160deg, #1a2140 0%, #2a1f4d 45%, #10263e 100%);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.06);
+  }
+  .stage.light {
+    background:
+      radial-gradient(120% 90% at 15% 0%,   #bcd4ff 0%, transparent 55%),
+      radial-gradient(110% 100% at 90% 10%, #ffd7ef 0%, transparent 50%),
+      radial-gradient(120% 110% at 60% 100%,#bfeadf 0%, transparent 60%),
+      linear-gradient(160deg, #dbe7ff 0%, #efdcf5 45%, #d3ecf5 100%);
+  }
+  .blob { position:absolute; border-radius:50%; filter:blur(2px); opacity:.75; animation: drift 14s ease-in-out infinite alternate; }
+  .b1 { width:190px; height:190px; left:16%; top:46%; background:radial-gradient(circle at 35% 30%, #ff9f6e, #d64b8a); }
+  .b2 { width:150px; height:150px; left:58%; top:28%; background:radial-gradient(circle at 35% 30%, #6ee7ff, #3b6ad6); animation-delay:-5s; }
+  .b3 { width:110px; height:110px; left:76%; top:58%; background:radial-gradient(circle at 35% 30%, #c3ff8a, #2f9e60); animation-delay:-9s; }
+  @keyframes drift {
+    from { transform: translate(0,0) scale(1); }
+    to   { transform: translate(46px,-34px) scale(1.14); }
+  }
+  .menubar-hint {
+    position:absolute; top:0; left:0; right:0; height:30px;
+    display:flex; align-items:center; justify-content:flex-end; gap:14px; padding:0 16px;
+    background:rgba(255,255,255,.07); backdrop-filter: blur(18px) saturate(160%);
+    -webkit-backdrop-filter: blur(18px) saturate(160%);
+    color:var(--text); font-size:12px;
+  }
+  .stage.light .menubar-hint { background:rgba(255,255,255,.4); }
+  .menubar-hint svg { width:15px; height:15px; opacity:.9; }
+
+  /* ---------- the bubble ---------- */
+  .bubble-slot {
+    position:absolute; left:0; right:0; bottom:56px;
+    display:flex; flex-direction:column; align-items:center; gap:8px;
+    pointer-events:none;
+  }
+  .caption {
+    pointer-events:auto;
+    font-size:11.5px; font-weight:500; color:var(--text-dim);
+    padding:4px 12px; border-radius:999px;
+    background:var(--glass-bg);
+    backdrop-filter: blur(18px) saturate(170%);
+    -webkit-backdrop-filter: blur(18px) saturate(170%);
+    box-shadow: 0 4px 14px rgba(0,0,0,.2), inset 0 1px 0 rgba(255,255,255,.2);
+    animation: pop .38s cubic-bezier(.2,1.4,.35,1);
+  }
+  .bubble {
+    pointer-events:auto;
+    display:flex; align-items:center; gap:11px;
+    padding:11px 12px 11px 18px;
+    border-radius:999px;
+    color:var(--text);
+    font-size:13.5px; font-weight:500;
+    background:var(--glass-bg);
+    backdrop-filter: blur(26px) saturate(190%);
+    -webkit-backdrop-filter: blur(26px) saturate(190%);
+    box-shadow:
+      0 14px 38px rgba(0,0,0,.34),
+      0 2px 8px rgba(0,0,0,.18),
+      inset 0 1px 0 rgba(255,255,255,.32),
+      inset 0 -1px 1px rgba(255,255,255,.06);
+    position:relative;
+    animation: pop .38s cubic-bezier(.2,1.4,.35,1);
+    white-space:nowrap;
+  }
+  .bubble::before { /* liquid-glass specular rim */
+    content:""; position:absolute; inset:0; border-radius:inherit; padding:1px;
+    background: linear-gradient(135deg, rgba(255,255,255,.55), rgba(255,255,255,.08) 35%, rgba(255,255,255,0) 60%, rgba(255,255,255,.28));
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor; mask-composite: exclude;
+    pointer-events:none;
+  }
+  @keyframes pop {
+    from { transform: translateY(14px) scale(.86); opacity:0; }
+    to   { transform: translateY(0)    scale(1);   opacity:1; }
+  }
+  .bubble .icon { width:17px; height:17px; flex:none; display:block; }
+
+  .pulse { animation: pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity:1; transform:scale(1);} 50% { opacity:.55; transform:scale(.88);} }
+
+  /* buttons inside the bubble */
+  .gbtn {
+    font: inherit; font-size:13px; font-weight:600;
+    padding:7px 15px; border-radius:999px; border:0; cursor:pointer;
+    color:var(--text);
+    background:var(--btn-glass);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.28), 0 1px 3px rgba(0,0,0,.12);
+    transition: background .15s, transform .08s;
+  }
+  .gbtn:hover { background:var(--btn-glass-hover); }
+  .gbtn:active { transform:scale(.96); }
+  .gbtn:disabled { opacity:.45; cursor:default; }
+  .gbtn.prominent {
+    color:#fff;
+    background: linear-gradient(180deg, rgba(255,90,80,.95), rgba(224,42,42,.95));
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.4), 0 3px 10px rgba(224,42,42,.4);
+  }
+  .gbtn.prominent:hover:not(:disabled) { background: linear-gradient(180deg, rgba(255,105,95,1), rgba(235,55,55,1)); }
+  .xbtn {
+    width:26px; height:26px; padding:0; border-radius:50%;
+    display:flex; align-items:center; justify-content:center;
+    font-weight:400;
+  }
+  .xbtn svg { width:11px; height:11px; }
+
+  .spinner {
+    width:16px; height:16px; flex:none; border-radius:50%;
+    border:2px solid rgba(255,255,255,.25); border-top-color: var(--text);
+    animation: spin .8s linear infinite;
+  }
+  .light .spinner { border-color: rgba(0,0,0,.15); border-top-color: var(--text); }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ---------- static gallery ---------- */
+  h2 { font-size:14px; font-weight:600; color:#fff; margin:34px 0 4px; }
+  .gallery-note { color:#8a8a93; font-size:12px; margin-bottom:14px; }
+  .gallery {
+    display:flex; flex-direction:column; gap:14px;
+    padding:26px 22px; border-radius:18px;
+    background:
+      radial-gradient(120% 90% at 15% 0%,   #35406e 0%, transparent 55%),
+      radial-gradient(110% 100% at 90% 10%, #7b3f6e 0%, transparent 50%),
+      linear-gradient(160deg, #1a2140 0%, #2a1f4d 45%, #10263e 100%);
+  }
+  .row { display:flex; align-items:center; gap:18px; }
+  .row .label { width:170px; flex:none; color:rgba(255,255,255,.5); font-size:11.5px; font-family:ui-monospace, "SF Mono", monospace; text-align:right; }
+  .row .bubble, .row .caption { animation:none; }
+  .row .stack { display:flex; flex-direction:column; align-items:flex-start; gap:8px; }
+  .tpl { color:#fff; font-size:12px; font-weight:600; margin:10px 0 2px; opacity:.85; }
+  .tpl:first-child { margin-top:0; }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="header">
+    <h1>CallCatch — Liquid Glass bubble</h1>
+    <small>EN UI · macOS 26+ glassEffect · прототип v2</small>
+  </div>
+  <p class="note">
+    CSS-приближение: в приложении будет <b>нативный</b> Liquid Glass (рефракция, динамический тинт, системные блики).
+    Один бабл, <b>4 шаблона содержимого</b> — переходы происходят внутри одной капсулы, ничего не плодится.
+    Кликай моменты, жми ▶ — полный сценарий. Кнопки в бабле живые.
+  </p>
+
+  <div class="controls" id="controls">
+    <button class="chip play" id="playBtn">▶ Полный флоу</button>
+    <span class="spacer"></span>
+    <button class="chip" id="themeBtn">☀️ Светлые обои</button>
+  </div>
+
+  <div class="stage" id="stage">
+    <div class="menubar-hint" title="Menu bar — системное стекло, без изменений">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 12h1.5M7 8v8M11 4v16M15 7v10M19 10v4M22 12h-1.5"/></svg>
+      <span id="clock">12:04</span>
+    </div>
+    <div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div>
+    <div class="bubble-slot" id="slot"></div>
+  </div>
+
+  <h2>4 шаблона</h2>
+  <p class="gallery-note">Всё содержимое бабла сводится к четырём шаблонам; подпись-caption появляется над капсулой только когда действие недоступно.</p>
+  <div class="gallery" id="gallery"></div>
+</div>
+
+<script>
+const ICONS = {
+  phone: c => `<svg class="icon" viewBox="0 0 24 24" fill="${c}"><path d="M20.01 15.38c-1.23 0-2.42-.2-3.53-.56a.98.98 0 0 0-1.01.24l-1.57 1.97c-2.83-1.35-5.48-3.9-6.89-6.83l1.95-1.66c.27-.28.35-.67.24-1.02-.37-1.11-.56-2.3-.56-3.53 0-.54-.45-.99-.99-.99H4.19C3.65 3 3 3.24 3 3.99 3 13.28 10.73 21 20.01 21c.71 0 .99-.63.99-1.18v-3.45c0-.54-.45-.99-.99-.99z"/></svg>`,
+  record: c => `<svg class="icon pulse" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="${c}" stroke-width="2.2"/><circle cx="12" cy="12" r="4.6" fill="${c}"/></svg>`,
+  check: c => `<svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="${c}"/><path d="M7.5 12.5l3 3 6-6.5" fill="none" stroke="rgba(0,0,0,.55)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+  warn: c => `<svg class="icon" viewBox="0 0 24 24"><path d="M12 2.5 22.5 21h-21L12 2.5z" fill="${c}"/><rect x="11" y="9" width="2" height="6" rx="1" fill="rgba(0,0,0,.6)"/><circle cx="12" cy="17.6" r="1.2" fill="rgba(0,0,0,.6)"/></svg>`,
+  x: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M5 5l14 14M19 5L5 19"/></svg>`,
+};
+const spinner = `<span class="spinner"></span>`;
+const xbtn = `<button class="gbtn xbtn" onclick="hide()" title="Dismiss">${ICONS.x}</button>`;
+
+/* 4 content templates — mirrors the planned BubbleView refactor */
+const tpl = {
+  action: (icon, text, btn, next, disabled) =>
+    `${icon}<span>${text}</span>
+     <button class="gbtn prominent" ${disabled ? 'disabled' : `onclick="go('${next}')"`}>${btn}</button>${xbtn}`,
+  progress: text => `${spinner}<span>${text}</span>`,
+  notice: (icon, text) => `${icon}<span>${text}</span>`,
+  error: text => `${ICONS.warn('var(--yellow)')}<span>${text}</span>
+     <button class="gbtn" onclick="hide()">Open Plaud</button>${xbtn}`,
+};
+
+/* the user-visible moments (EN strings from the design) */
+const STATES = {
+  callDetected:  { html: () => tpl.action(ICONS.phone('var(--green)'), 'Call in Discord', 'Record in Plaud', 'starting') },
+  starting:      { html: () => tpl.progress('Starting…') },
+  recording:     { html: () => tpl.notice(ICONS.record('var(--red)'), 'Recording started') },
+  callEnded:     { html: () => tpl.action(ICONS.check('var(--green)'), 'Call in Discord ended', 'Stop Recording', 'stopping') },
+  stopping:      { html: () => tpl.progress('Stopping…'), hiddenChip: true },
+  stopped:       { html: () => tpl.notice(ICONS.check('var(--green)'), 'Recording stopped'), hiddenChip: true },
+  error:         { html: () => tpl.error('Recording didn’t start') },
+  errorStop:     { html: () => tpl.error('Stop the recording in Plaud manually'), hiddenChip: true },
+  alreadyRecording: {
+    caption: 'Plaud is already recording',
+    html: () => tpl.action(ICONS.phone('var(--green)'), 'Call in Discord', 'Record in Plaud', '', true),
+  },
+};
+
+const slot = document.getElementById('slot');
+let current = null, flowTimer = null;
+
+function render(name) {
+  current = name;
+  const s = STATES[name];
+  slot.innerHTML = (s.caption ? `<div class="caption">${s.caption}</div>` : '')
+                 + `<div class="bubble">${s.html()}</div>`;
+  document.querySelectorAll('.chip[data-state]').forEach(c =>
+    c.classList.toggle('active', c.dataset.state === name));
+}
+function hide() {
+  slot.innerHTML = ''; current = null;
+  document.querySelectorAll('.chip[data-state]').forEach(c => c.classList.remove('active'));
+}
+function go(name) {
+  stopFlow(); render(name);
+  if (name === 'starting') setTimeout(() => current === 'starting' && render('recording'), 1400);
+  if (name === 'stopping') setTimeout(() => {
+    if (current === 'stopping') { render('stopped'); setTimeout(() => current === 'stopped' && hide(), 1800); }
+  }, 1300);
+}
+function stopFlow() { if (flowTimer) { flowTimer.forEach(clearTimeout); flowTimer = null; } }
+function playFlow() {
+  stopFlow();
+  const steps = [
+    ['callDetected', 0], ['starting', 2200], ['recording', 3600],
+    ['callEnded', 6300], ['stopping', 8300], ['stopped', 9600], [null, 11400],
+  ];
+  flowTimer = steps.map(([s, t]) => setTimeout(() => s ? render(s) : hide(), t));
+}
+
+/* controls */
+const controls = document.getElementById('controls');
+const themeBtn = document.getElementById('themeBtn');
+Object.keys(STATES).filter(n => !STATES[n].hiddenChip).forEach(n => {
+  const b = document.createElement('button');
+  b.className = 'chip'; b.dataset.state = n; b.textContent = n;
+  b.onclick = () => { stopFlow(); render(n); };
+  controls.insertBefore(b, document.querySelector('.spacer'));
+});
+document.getElementById('playBtn').onclick = playFlow;
+themeBtn.onclick = () => {
+  const stage = document.getElementById('stage');
+  const light = stage.classList.toggle('light');
+  document.body.classList.toggle('light', light);
+  themeBtn.textContent = light ? '🌙 Тёмные обои' : '☀️ Светлые обои';
+};
+document.getElementById('clock').textContent =
+  new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: false });
+
+/* gallery grouped by template */
+const GROUPS = [
+  ['Action — иконка + текст + главная кнопка + ✕', ['callDetected', 'callEnded', 'alreadyRecording']],
+  ['Progress — спиннер + текст', ['starting', 'stopping']],
+  ['Notice — иконка + текст, сам исчезает', ['recording', 'stopped']],
+  ['Error — предупреждение + Open Plaud + ✕', ['error', 'errorStop']],
+];
+const gallery = document.getElementById('gallery');
+GROUPS.forEach(([title, names]) => {
+  const h = document.createElement('div'); h.className = 'tpl'; h.textContent = title;
+  gallery.appendChild(h);
+  names.forEach(n => {
+    const s = STATES[n];
+    const row = document.createElement('div'); row.className = 'row';
+    const body = s.html().replaceAll(/onclick="[^"]*"/g, '');
+    row.innerHTML = `<div class="label">${n}</div><div class="stack">`
+      + (s.caption ? `<div class="caption">${s.caption}</div>` : '')
+      + `<div class="bubble">${body}</div></div>`;
+    gallery.appendChild(row);
+  });
+});
+
+render('callDetected');
+</script>
+</body>
+</html>
