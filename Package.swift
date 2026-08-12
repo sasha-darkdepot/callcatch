@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "CallCatch",
-    platforms: [.macOS("14.4")],
+    platforms: [.macOS("26.0")],
     targets: [
         .executableTarget(
             name: "CallCatch",
