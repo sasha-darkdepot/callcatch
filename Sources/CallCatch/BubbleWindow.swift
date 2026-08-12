@@ -219,8 +219,12 @@ final class DrainModel: ObservableObject {
 
     /// Доля оставшейся заливки [0…1] на данный момент.
     func progress() -> Double {
-        let left = paused ? remaining : max(0, remaining - (CACurrentMediaTime() - startedAt))
-        return max(0, min(1, left / total))
+        return max(0, min(1, remainingTime() / total))
+    }
+
+    /// Оставшиеся секунды отсчёта на данный момент.
+    func remainingTime() -> TimeInterval {
+        paused ? remaining : max(0, remaining - (CACurrentMediaTime() - startedAt))
     }
 }
 
@@ -230,32 +234,47 @@ final class DrainModel: ObservableObject {
 struct DrainingStopButton: View {
     @ObservedObject var model: DrainModel
     let action: () -> Void
+    /// Доля видимой заливки; ведётся CA-анимацией (linear до 0), а не
+    /// TimelineView: его расписание НЕ тикает в неактивном приложении, а
+    /// accessory-app неактивен всегда (заливка «появлялась только по ховеру»).
+    @State private var shown: Double = 1
 
     var body: some View {
         Button(action: action) {
-            TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: model.paused)) { _ in
-                Text("Stop Recording")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 6)
-                    .background(
-                        ZStack(alignment: .leading) {
-                            Capsule().fill(Color.red.opacity(model.paused ? 0.45 : 0.3))
-                            GeometryReader { geo in
-                                Capsule().fill(Color.red.opacity(0.9))
-                                    .mask(alignment: .leading) {
-                                        Rectangle()
-                                            .frame(width: geo.size.width * model.progress())
-                                    }
-                            }
+            Text("Stop Recording")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 6)
+                .background(
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color.red.opacity(model.paused ? 0.45 : 0.3))
+                            .animation(.easeInOut(duration: 0.15), value: model.paused)
+                        GeometryReader { geo in
+                            Capsule().fill(Color.red.opacity(0.9))
+                                .mask(alignment: .leading) {
+                                    Rectangle().frame(width: geo.size.width * shown)
+                                }
                         }
-                    )
-                    .overlay(Capsule().strokeBorder(.white.opacity(0.25), lineWidth: 0.5))
-            }
+                    }
+                )
+                .overlay(Capsule().strokeBorder(.white.opacity(0.25), lineWidth: 0.5))
         }
         .buttonStyle(.plain)
-        .animation(.easeInOut(duration: 0.15), value: model.paused)
+        .onAppear {
+            shown = model.progress()
+            withAnimation(.linear(duration: model.remainingTime())) { shown = 0 }
+        }
+        .onChange(of: model.paused) { _, paused in
+            if paused {
+                // Застыть на текущей доле: присвоение без анимации снимает
+                // летящую linear-анимацию и фиксирует заливку.
+                var t = Transaction(); t.disablesAnimations = true
+                withTransaction(t) { shown = model.progress() }
+            } else {
+                withAnimation(.linear(duration: model.remainingTime())) { shown = 0 }
+            }
+        }
     }
 }
 
