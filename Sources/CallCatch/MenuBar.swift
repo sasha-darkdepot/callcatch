@@ -3,11 +3,11 @@ import AppKit
 final class MenuBar: NSObject {
     private let item: NSStatusItem
     private let attentionItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-    private let findIdItem = NSMenuItem(title: "Найти user_id заново", action: #selector(findIdTapped), keyEquivalent: "")
-    private let recordItem = NSMenuItem(title: "Записать сейчас", action: #selector(recordTapped), keyEquivalent: "")
-    private let stopItem = NSMenuItem(title: "Остановить запись", action: #selector(stopTapped), keyEquivalent: "")
-    private let autoItem = NSMenuItem(title: "Авто-запись", action: #selector(autoTapped), keyEquivalent: "")
-    private let loginItem = NSMenuItem(title: "Запускать при входе", action: #selector(loginTapped), keyEquivalent: "")
+    private let findIdItem = NSMenuItem(title: "Find user_id Again", action: #selector(findIdTapped), keyEquivalent: "")
+    private let recordItem = NSMenuItem(title: "Record Now", action: #selector(recordTapped), keyEquivalent: "")
+    private let stopItem = NSMenuItem(title: "Stop Recording", action: #selector(stopTapped), keyEquivalent: "")
+    private let autoItem = NSMenuItem(title: "Auto-record", action: #selector(autoTapped), keyEquivalent: "")
+    private let loginItem = NSMenuItem(title: "Launch at Login", action: #selector(loginTapped), keyEquivalent: "")
 
     private let onRecord: () -> Void
     private let onStop: () -> Void
@@ -29,13 +29,15 @@ final class MenuBar: NSObject {
         menu.autoenablesItems = false
         [attentionItem, findIdItem, recordItem, stopItem, .separator(), autoItem, loginItem, .separator()]
             .forEach { menu.addItem($0) }
-        let quit = NSMenuItem(title: "Выход", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        let quit = NSMenuItem(title: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         menu.addItem(quit)
         [findIdItem, recordItem, stopItem, autoItem, loginItem].forEach { $0.target = self }
         attentionItem.isHidden = true
         attentionItem.isEnabled = false
-        // Авто-режим и логин-айтем описывают известное ограничение (7 сек) прямо тут.
-        autoItem.toolTip = "Запись стартует сама через 7 сек после начала звонка. Голосовое длиннее 7 сек тоже запишется."
+        attentionItem.image = NSImage(systemSymbolName: "exclamationmark.triangle.fill",
+                                      accessibilityDescription: "Needs attention")
+        // Авто-режим описывает известное ограничение (7 сек) прямо тут.
+        autoItem.toolTip = "Recording starts automatically 7 s after a call begins. A voice message longer than 7 s will be recorded too."
         item.menu = menu
         update(status: .watching, canRecordNow: false, canStopNow: false)
     }
@@ -55,7 +57,7 @@ final class MenuBar: NSObject {
         loginItem.state = settings.launchAtLogin ? .on : .off
         findIdItem.isHidden = settings.userId != nil // показываем только когда id не найден
         if case let .needsAttention(msg) = status {
-            attentionItem.title = "⚠️ \(msg)"
+            attentionItem.title = msg
             attentionItem.isHidden = false
         } else {
             attentionItem.isHidden = true
