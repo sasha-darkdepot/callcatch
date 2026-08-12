@@ -18,8 +18,9 @@ in messengers go unrecorded unless you remember to start Plaud by hand.
 - **Detects calls** in Discord, Signal, Telegram (App Store + Desktop builds)
   and WhatsApp by watching per-process microphone usage — event-driven, no
   polling of the apps themselves, no special permissions for detection.
-- **Bubble UI**: a floating panel at the bottom of the screen — "Record in
-  Plaud" when a call starts, "Stop recording" when it ends.
+- **Bubble UI**: a floating Liquid Glass capsule at the bottom of the screen —
+  "Record in Plaud" when a call starts, "Stop Recording" when it ends. Native
+  macOS 26 `glassEffect`, Lucide icons, English UI.
 - **Starts recording** in Plaud via its `plaud://` deep link and confirms the
   start by reading Plaud's own log (with retries for a cold start).
 - **Stops recording** by clicking Plaud's floating recording widget through
@@ -30,7 +31,7 @@ in messengers go unrecorded unless you remember to start Plaud by hand.
 
 ## Requirements
 
-- macOS 14.4 or newer (uses the CoreAudio process-objects API).
+- macOS 26 or newer (Liquid Glass UI; CoreAudio process-objects API).
 - The Plaud desktop app, installed and signed in.
 - To build: Xcode / Swift 6 toolchain. An Apple Development signing identity
   is recommended (see [Signing](#signing-recommended)).
@@ -97,6 +98,8 @@ every rebuild.
 - Verified against Plaud v1.3.7; a Plaud update may require re-checking the
   deep-link and stop behavior.
 
+Icons: [Lucide](https://lucide.dev) (ISC license), vendored as path data.
+
 ## Versioning & releases
 
 CallCatch uses [Semantic Versioning](https://semver.org) — `MAJOR.MINOR.PATCH`.
@@ -138,6 +141,7 @@ CALLCATCH_DEBUG=1 ...       # verbose logging to ~/Library/Logs/CallCatch.log
 ```
 Sources/CallCatch/
   AppState.swift        finite state machine (lease, retries, bubbles)
+  LucideIcons.swift     vendored Lucide glyphs + tiny SVG-path parser
   MicMonitor.swift      CoreAudio detection adapter
   PIDTracker.swift      per-app process ref-count + end-of-call debounce
   PlaudController.swift  Plaud adapter (deep link, log confirm, stop)
@@ -146,7 +150,7 @@ Sources/CallCatch/
   UserIdExtractor.swift  user_id from Plaud logs
   WatchedApps.swift     the four apps + bundle-id matching
   BubbleWindow / MenuBar / Settings / Log / main
-Tests/CallCatchTests/   48 unit tests (all logic behind protocols)
+Tests/CallCatchTests/   61 unit tests (all logic behind protocols)
 scripts/build-app.sh    build + sign + optional install
 ```
 

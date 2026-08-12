@@ -11,12 +11,12 @@ third-party dependencies). It detects calls in Discord/Signal/Telegram/WhatsApp
 by watching per-process microphone use, then starts and stops a recording in
 the separate **Plaud** desktop app. It is glue around another app's private
 behavior, so its correctness depends on empirically-verified assumptions about
-Plaud (see Gotchas). Verified against **Plaud v1.3.7, macOS 14.4+**.
+Plaud (see Gotchas). Verified against **Plaud v1.3.7, macOS 26+**.
 
 ## Commands
 
 ```bash
-swift test                                    # 57 unit tests — run before declaring work done
+swift test                                    # 61 unit tests — run before declaring work done
 swift test --filter AppStateTests/testFoo     # a single test
 swift build                                   # debug build
 INSTALL=1 bash scripts/build-app.sh           # signed .app → /Applications/Call Catch.app
@@ -66,6 +66,9 @@ re-verifying against live Plaud.
   the `IsRunningInput` listener does not fire for every app. Don't drop the poll.
 - Permissions survive rebuilds only because the app is **code-signed with a
   stable identity**; ad-hoc signing resets Accessibility on every build.
+- **UI strings are English** and the bubble is Liquid Glass (macOS 26
+  `glassEffect`, Lucide icons vendored in `LucideIcons.swift`) — the platform
+  floor is 26.0; don't reintroduce `#available` shims for older macOS.
 
 ## Boundaries
 
