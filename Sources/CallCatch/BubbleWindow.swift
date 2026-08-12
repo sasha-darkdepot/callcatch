@@ -1,10 +1,15 @@
 import AppKit
 import SwiftUI
 
-/// Плавающий бабл внизу по центру основного экрана. Non-activating (не крадёт
-/// фокус — кнопки только мышью, клавиатурный эквивалент в menu bar меню),
+/// Плавающий бабл внизу по центру экрана. Non-activating (не крадёт фокус),
 /// виден поверх fullscreen (.fullScreenAuxiliary), не попадает в захват
-/// экрана (sharingType = .none), показывается независимо от Focus/DND.
+/// экрана (sharingType = .none, кроме --test-bubble), независим от Focus/DND.
+///
+/// Liquid Glass здесь — AppKit-уровня (NSGlassEffectView), не SwiftUI:
+/// SwiftUI-glassEffect деградирует до плоского blur, когда приложение не в
+/// фокусе, а accessory-app не в фокусе всегда. Капсула и caption-пилл —
+/// отдельные стёкла-сиблинги в одном NSGlassEffectContainerView (glass не
+/// умеет семплить glass — вложение запрещено гайдлайнами).
 final class BubbleWindow {
     private var panel: NSPanel?
     private let onRecord: () -> Void
@@ -27,17 +32,39 @@ final class BubbleWindow {
             panel?.orderOut(nil)
             return
         }
-        // Entrance-анимация только при появлении с нуля: контент пересоздаётся
-        // на каждую смену состояния, и без флага spring переигрывался бы всякий раз.
         let isNewAppearance = !(panel?.isVisible ?? false)
-        let content = BubbleView(state: state, isNewAppearance: isNewAppearance,
-                                 onRecord: onRecord, onStop: onStop,
-                                 onOpenPlaud: onOpenPlaud, onDismiss: onDismiss)
-        let hosting = NSHostingView(rootView: content)
         let p = panel ?? makePanel()
-        p.contentView = hosting
-        hosting.layoutSubtreeIfNeeded() // fittingSize до первого layout может быть нулевым
-        var size = hosting.fittingSize
+
+        let row = NSHostingView(rootView: BubbleView(
+            state: state, onRecord: onRecord, onStop: onStop,
+            onOpenPlaud: onOpenPlaud, onDismiss: onDismiss))
+        let capsule = NSGlassEffectView()
+        capsule.style = .clear
+        capsule.cornerRadius = 999 // капсула
+        capsule.contentView = row
+
+        var arranged: [NSView] = []
+        if case let .callDetected(_, .some(reason)) = state {
+            let pill = NSGlassEffectView()
+            pill.style = .clear
+            pill.cornerRadius = 999
+            pill.contentView = NSHostingView(rootView: BubbleCaptionView(text: reason))
+            arranged.append(pill)
+        }
+        arranged.append(capsule)
+
+        let stack = NSStackView(views: arranged)
+        stack.orientation = .vertical
+        stack.alignment = .centerX
+        stack.spacing = 8
+
+        let container = NSGlassEffectContainerView()
+        container.spacing = 8
+        container.contentView = stack
+
+        p.contentView = container
+        container.layoutSubtreeIfNeeded() // fittingSize до первого layout может быть нулевым
+        var size = container.fittingSize
         if size.width < 10 || size.height < 10 {
             size = NSSize(width: 420, height: 52) // страховка от невидимой панели
         }
@@ -48,10 +75,26 @@ final class BubbleWindow {
             ?? NSScreen.main
         if let screen {
             let x = screen.visibleFrame.midX - size.width / 2
-            let y = screen.visibleFrame.minY + 80 - 12 // 12 = прозрачное поле BubbleView
+            let y = screen.visibleFrame.minY + 80
             p.setFrameOrigin(NSPoint(x: x, y: y))
         }
-        p.orderFrontRegardless()
+        if isNewAppearance {
+            // Entrance только при появлении с нуля: fade + подъём на уровне
+            // панели (контент пересоздаётся на каждую смену состояния).
+            let target = p.frame.origin
+            p.setFrameOrigin(NSPoint(x: target.x, y: target.y - 10))
+            p.alphaValue = 0
+            p.orderFrontRegardless()
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.28
+                ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                p.animator().alphaValue = 1
+                p.animator().setFrame(NSRect(origin: target, size: p.frame.size), display: true)
+            }
+        } else {
+            p.alphaValue = 1
+            p.orderFrontRegardless()
+        }
         Log.info("BubbleWindow: show \(state) frame=\(p.frame)")
         panel = p
     }
@@ -66,7 +109,7 @@ final class BubbleWindow {
         // В режиме --test-bubble наоборот нужен на скриншотах — для visual-проверок.
         p.sharingType = CommandLine.arguments.contains("--test-bubble") ? .readOnly : .none
         p.isOpaque = false
-        p.backgroundColor = .clear
+        p.backgroundColor = .clear // обязательно: иначе окно закрасит фон поверх стекла
         p.hasShadow = false // стекло рисует глубину само — панельная тень дала бы дубль
         p.hidesOnDeactivate = false
         p.isReleasedWhenClosed = false
@@ -74,56 +117,41 @@ final class BubbleWindow {
     }
 }
 
-/// Контент бабла: Liquid Glass капсула, 4 шаблона (Action / Progress / Notice /
-/// Error) + caption-пилл над капсулой для причины недоступности записи.
+/// Caption-пилл над капсулой: причина, почему запись недоступна.
+/// Стеклянный фон даёт NSGlassEffectView снаружи — тут только текст.
+struct BubbleCaptionView: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 4)
+            .fixedSize()
+    }
+}
+
+/// Контент капсулы: 4 шаблона (Action / Progress / Notice / Error).
+/// Без стекла — фон даёт NSGlassEffectView снаружи; кнопки сплошные
+/// (glass-on-glass запрещён, и системные стеклянные стили глушатся в
+/// неактивном приложении).
 struct BubbleView: View {
     let state: BubbleState
-    let isNewAppearance: Bool
     let onRecord: () -> Void
     let onStop: () -> Void
     let onOpenPlaud: () -> Void
     let onDismiss: () -> Void
 
-    @State private var appeared = false
-
     var body: some View {
-        GlassEffectContainer(spacing: 8) {
-            VStack(spacing: 8) {
-                if let reason = disabledReason {
-                    Text(reason)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 4)
-                        .glassEffect(.clear, in: .capsule) // .clear: прозрачная линза, не матовое .regular
-                }
-                HStack(spacing: 11) { content }
-                    .padding(.vertical, 11)
-                    .padding(.leading, 18)
-                    .padding(.trailing, trailingPadding)
-                    .glassEffect(.clear.interactive(), in: .capsule)
-            }
-        }
-        // Панель non-activating и никогда не key — без форса контролы рисуются
-        // приглушёнными, как в неактивном окне.
-        .environment(\.controlActiveState, .key)
-        .padding(12) // прозрачное поле: запас для spring — панель обрезает по своему фрейму
-        .scaleEffect(appeared ? 1 : 0.86)
-        .offset(y: appeared ? 0 : 10)
-        .opacity(appeared ? 1 : 0)
-        .onAppear {
-            if isNewAppearance {
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.68)) { appeared = true }
-            } else {
-                appeared = true // смена состояния: entrance не переигрываем
-            }
-        }
-        .fixedSize()
-    }
-
-    private var disabledReason: String? {
-        if case let .callDetected(_, reason) = state { return reason }
-        return nil
+        HStack(spacing: 11) { content }
+            .padding(.vertical, 11)
+            .padding(.leading, 18)
+            .padding(.trailing, trailingPadding)
+            // Панель non-activating и никогда не key — без форса контролы
+            // рисуются приглушёнными, как в неактивном окне.
+            .environment(\.controlActiveState, .key)
+            .fixedSize()
     }
 
     /// Ряды, заканчивающиеся текстом, получают справа тот же отступ, что слева;
@@ -165,16 +193,14 @@ struct BubbleView: View {
                            button: String, disabled: Bool, action: @escaping () -> Void) -> some View {
         LucideIcon(icon, tint: tint)
         bubbleText(text)
-        // Кнопки рисуем сами (plain + свой glass-фон): системные стеклянные
-        // стили глушатся в неактивном приложении, а accessory-app неактивен
-        // почти всегда — красная кнопка выглядела вечно выключенной.
         Button(action: action) {
             Text(button)
                 .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(.white)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 6)
-                .glassEffect(.clear.tint(.red.opacity(0.85)).interactive(), in: .capsule)
+                .background(Capsule().fill(Color.red.opacity(0.9)))
+                .overlay(Capsule().strokeBorder(.white.opacity(0.25), lineWidth: 0.5))
         }
         .buttonStyle(.plain)
         .disabled(disabled)
@@ -201,7 +227,7 @@ struct BubbleView: View {
                 .font(.system(size: 13, weight: .medium))
                 .padding(.horizontal, 14)
                 .padding(.vertical, 6)
-                .glassEffect(.clear.interactive(), in: .capsule)
+                .background(Capsule().fill(Color.primary.opacity(0.12)))
         }
         .buttonStyle(.plain)
         dismissButton
@@ -215,7 +241,7 @@ struct BubbleView: View {
         Button(action: onDismiss) {
             LucideIcon(.x, tint: .primary, size: 11)
                 .padding(8)
-                .glassEffect(.clear.interactive(), in: .circle)
+                .background(Circle().fill(Color.primary.opacity(0.12)))
         }
         .buttonStyle(.plain)
     }

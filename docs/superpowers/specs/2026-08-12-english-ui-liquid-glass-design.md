@@ -34,7 +34,7 @@
 | Redesign depth | Full native glass restyle ("option B") | (session-settled: user-approved — rejected minimal material swap (A) and `glassEffectID` morphing deluxe (C)) |
 | Disabled reason placement | Caption pill **above** the capsule, not inline | Inline reason overloads the row. (session-settled: user-directed — rejected inline reason text) |
 | UI state simplification | 4 content templates over per-state bespoke layouts | "Чем проще тем вернее." (session-settled: user-directed) |
-| Glass API | `GlassEffectContainer` + `.glassEffect(.clear.interactive(), in: .capsule)` | Verified to compile with the installed Xcode 26.6 SDK (probe, 2026-08-12). `.clear` (transparent lens), not `.regular` — the regular variant reads as frosted/matte (user live-check 2026-08-12). |
+| Glass API | **AppKit `NSGlassEffectView`** (style `.clear`, cornerRadius 999) + `NSGlassEffectContainerView`, SwiftUI content inside via `NSHostingView` | SwiftUI `.glassEffect` **degrades to a flat blur whenever the app is unfocused** (documented: HWS forum #30067), and an accessory app is unfocused always — live-confirmed 2026-08-12 (matte capsule, dimmed buttons). AppKit glass renders at window level and doesn't degrade. `.clear` per user preference (regular read as frosted). |
 | Bubble icons | **Lucide** icons with tints (no emoji, no SF Symbols in the bubble) | User preference. Vendored as hand-ported SwiftUI `Path` code in `LucideIcons.swift` — no package dependency (zero-deps principle holds), no SwiftPM resource bundle (build-app.sh keeps copying a bare binary). Lucide is ISC-licensed; attribution line goes in README. (session-settled: user-directed — rejected SF Symbols) |
 
 ## String table (RU → EN)
@@ -109,17 +109,24 @@ templates (this *simplifies* the current 9-branch switch):
 
 ## Visual spec
 
-- **Capsule:** `GlassEffectContainer` wrapping an `HStack`, background via
-  `.glassEffect(.clear.interactive(), in: .capsule)`. Content padding
-  ~11 pt vertical / 18 pt leading, spacing 11 pt; trailing padding is
+- **Capsule:** `NSGlassEffectView` (`.clear`, cornerRadius 999) whose
+  `contentView` is an `NSHostingView` with the SwiftUI row; the caption pill
+  is a **sibling** `NSGlassEffectView` in the same
+  `NSGlassEffectContainerView` (vertical `NSStackView`, spacing 8). Content
+  padding ~11 pt vertical / 18 pt leading, spacing 11 pt; trailing padding is
   **18 pt when the row ends with text** (Progress/Notice) and 12 pt when it
-  ends with the round ✕ (Action/Error) — equal-margin optics (user
-  live-check). Text 13 pt medium; **nothing heavier than medium anywhere**,
-  including button labels (glass buttons default to semibold — override).
-- **Non-key panel gotcha:** the panel is non-activating and never becomes key,
-  so SwiftUI renders controls dimmed/inactive by default — force
-  `.environment(\.controlActiveState, .key)` on the bubble root or every
-  button looks disabled (user live-check 2026-08-12).
+  ends with the round ✕ (Action/Error). Text 13 pt medium; **nothing heavier
+  than medium anywhere**.
+- **No glass-on-glass:** buttons inside the capsule are solid, not glass —
+  Apple's rule ("glass cannot sample other glass"): primary = solid red
+  capsule with white 13 pt medium label; secondary/✕ =
+  `Color.primary.opacity(0.12)` capsule/circle.
+- **Unfocused-app gotchas (both live-hit 2026-08-12):** (1) SwiftUI
+  `.glassEffect` degrades to flat blur when the app is unfocused — an
+  accessory app is unfocused always, hence AppKit glass; (2) SwiftUI controls
+  render dimmed in a never-key panel — keep
+  `.environment(\.controlActiveState, .key)` on the row, and avoid system
+  glass button styles (they dim with app activation regardless).
 - **Caption pill** (only with a disabled reason): separate small glass capsule
   stacked 8 pt above the main one inside the same `VStack`/container. If
   `GlassEffectContainer` visually fuses the pill with the capsule, set the
@@ -138,16 +145,12 @@ templates (this *simplifies* the current 9-branch switch):
   `record.circle.fill`, `exclamationmark.triangle.fill`) — template glyphs in
   the system status bar follow the platform convention; Lucide applies to the
   bubble only.
-- **Appear animation:** spring (scale 0.86→1, slight rise, fade) — runs only
-  on the **hidden→visible** transition: `BubbleWindow.show` passes an
-  `isNewAppearance` flag (panel was not previously visible) into `BubbleView`,
-  and the spring fires only when it's true. Without the gate the
-  rebuild-per-state show cycle replays the entrance on every content swap
-  (review finding).
-- **Animation headroom:** the panel is sized exactly to `fittingSize`, so the
-  root view gets a transparent ~12 pt outer margin (panel origin shifted down
-  by the same amount to keep the on-screen position) — otherwise the rise/scale
-  clips at the panel edge (review finding).
+- **Appear animation:** panel-level fade + 10 pt rise (`NSAnimationContext`,
+  0.28 s easeOut) — runs only on the **hidden→visible** transition (the
+  rebuild-per-state show cycle would otherwise replay the entrance on every
+  content swap — review finding). Animating the panel, not the SwiftUI tree,
+  needs no clipping headroom and moves the AppKit glass together with the
+  content.
 - **Panel:** keep `.nonactivatingPanel`, `.fullScreenAuxiliary`,
   `sharingType = .none`, `.statusBar` level, screen-under-cursor placement.
   Try `hasShadow = false` (glass draws its own depth); revert after a live
