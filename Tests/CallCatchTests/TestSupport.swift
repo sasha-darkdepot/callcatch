@@ -38,6 +38,11 @@ final class MockScheduler {
     }
 }
 
+/// Мутируемые монотонные часы для тестов пауз (инжектируются как now()).
+final class MockClock {
+    var now: TimeInterval = 0
+}
+
 final class EventLog: CallEventDelegate {
     var events: [String] = []
     func callStarted(app: WatchedApp) { events.append("start:\(app.rawValue)") }
