@@ -34,7 +34,7 @@
 | Redesign depth | Full native glass restyle ("option B") | (session-settled: user-approved — rejected minimal material swap (A) and `glassEffectID` morphing deluxe (C)) |
 | Disabled reason placement | Caption pill **above** the capsule, not inline | Inline reason overloads the row. (session-settled: user-directed — rejected inline reason text) |
 | UI state simplification | 4 content templates over per-state bespoke layouts | "Чем проще тем вернее." (session-settled: user-directed) |
-| Glass API | `GlassEffectContainer` + `.glassEffect(.regular.interactive(), in: .capsule)` | Verified to compile with the installed Xcode 26.6 SDK (probe, 2026-08-12). |
+| Glass API | `GlassEffectContainer` + `.glassEffect(.clear.interactive(), in: .capsule)` | Verified to compile with the installed Xcode 26.6 SDK (probe, 2026-08-12). `.clear` (transparent lens), not `.regular` — the regular variant reads as frosted/matte (user live-check 2026-08-12). |
 | Bubble icons | **Lucide** icons with tints (no emoji, no SF Symbols in the bubble) | User preference. Vendored as hand-ported SwiftUI `Path` code in `LucideIcons.swift` — no package dependency (zero-deps principle holds), no SwiftPM resource bundle (build-app.sh keeps copying a bare binary). Lucide is ISC-licensed; attribution line goes in README. (session-settled: user-directed — rejected SF Symbols) |
 
 ## String table (RU → EN)
@@ -110,16 +110,23 @@ templates (this *simplifies* the current 9-branch switch):
 ## Visual spec
 
 - **Capsule:** `GlassEffectContainer` wrapping an `HStack`, background via
-  `.glassEffect(.regular.interactive(), in: .capsule)`. Content padding
-  ~11 pt vertical / 18 pt leading / 12 pt trailing, spacing 11 pt. Text
-  13 pt medium, `.primary` color (glass supplies vibrancy).
+  `.glassEffect(.clear.interactive(), in: .capsule)`. Content padding
+  ~11 pt vertical / 18 pt leading, spacing 11 pt; trailing padding is
+  **18 pt when the row ends with text** (Progress/Notice) and 12 pt when it
+  ends with the round ✕ (Action/Error) — equal-margin optics (user
+  live-check). Text 13 pt medium; **nothing heavier than medium anywhere**,
+  including button labels (glass buttons default to semibold — override).
+- **Non-key panel gotcha:** the panel is non-activating and never becomes key,
+  so SwiftUI renders controls dimmed/inactive by default — force
+  `.environment(\.controlActiveState, .key)` on the bubble root or every
+  button looks disabled (user live-check 2026-08-12).
 - **Caption pill** (only with a disabled reason): separate small glass capsule
   stacked 8 pt above the main one inside the same `VStack`/container. If
   `GlassEffectContainer` visually fuses the pill with the capsule, set the
   container spacing explicitly. The pill animates together with the capsule
   (the appear animation lives on the outer container).
-- **Primary button:** `.buttonStyle(.glassProminent)` + `.tint(.red)`.
-- **Secondary button** (Open Plaud): `.buttonStyle(.glass)`.
+- **Primary button:** `.buttonStyle(.glassProminent)` + `.buttonBorderShape(.capsule)` + `.tint(.red)`, label 13 pt medium.
+- **Secondary button** (Open Plaud): `.buttonStyle(.glass)` + `.buttonBorderShape(.capsule)`, label 13 pt medium.
 - **Dismiss:** Lucide `x` glyph in a circular glass button.
 - **Icons (17 pt, Lucide, 2 pt stroke, round caps):** explicit state mapping —
   `phone` green (callDetected), `disc` red with a pulse (recordingStarted),

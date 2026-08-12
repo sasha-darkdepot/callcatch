@@ -95,15 +95,18 @@ struct BubbleView: View {
                         .foregroundStyle(.secondary)
                         .padding(.horizontal, 12)
                         .padding(.vertical, 4)
-                        .glassEffect(.regular, in: .capsule)
+                        .glassEffect(.clear, in: .capsule) // .clear: прозрачная линза, не матовое .regular
                 }
                 HStack(spacing: 11) { content }
                     .padding(.vertical, 11)
                     .padding(.leading, 18)
-                    .padding(.trailing, 12)
-                    .glassEffect(.regular.interactive(), in: .capsule)
+                    .padding(.trailing, trailingPadding)
+                    .glassEffect(.clear.interactive(), in: .capsule)
             }
         }
+        // Панель non-activating и никогда не key — без форса контролы рисуются
+        // приглушёнными, как в неактивном окне.
+        .environment(\.controlActiveState, .key)
         .padding(12) // прозрачное поле: запас для spring — панель обрезает по своему фрейму
         .scaleEffect(appeared ? 1 : 0.86)
         .offset(y: appeared ? 0 : 10)
@@ -121,6 +124,15 @@ struct BubbleView: View {
     private var disabledReason: String? {
         if case let .callDetected(_, reason) = state { return reason }
         return nil
+    }
+
+    /// Ряды, заканчивающиеся текстом, получают справа тот же отступ, что слева;
+    /// у рядов с круглой кнопкой ✕ на конце отступ меньше — баланс за счёт кнопки.
+    private var trailingPadding: CGFloat {
+        switch state {
+        case .starting, .stopping, .recordingStarted, .stopped: 18
+        default: 12
+        }
     }
 
     @ViewBuilder private var content: some View {
@@ -154,7 +166,9 @@ struct BubbleView: View {
         LucideIcon(icon, tint: tint)
         bubbleText(text)
         Button(button, action: action)
+            .font(.system(size: 13, weight: .medium)) // дефолт стеклянных кнопок — semibold
             .buttonStyle(.glassProminent)
+            .buttonBorderShape(.capsule)
             .tint(.red)
             .disabled(disabled)
         dismissButton
@@ -175,7 +189,9 @@ struct BubbleView: View {
         LucideIcon(.triangleAlert, tint: .yellow)
         bubbleText(text)
         Button("Open Plaud", action: onOpenPlaud)
+            .font(.system(size: 13, weight: .medium))
             .buttonStyle(.glass)
+            .buttonBorderShape(.capsule)
         dismissButton
     }
 
