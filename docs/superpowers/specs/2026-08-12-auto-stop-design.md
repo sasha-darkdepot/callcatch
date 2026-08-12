@@ -110,7 +110,11 @@ pause the countdown just by hovering.
   filled. Note: SwiftUI can't suspend a running animation mid-flight — the
   view keeps its own progress bookkeeping (store the fraction on pause,
   restart a linear animation over the remainder on resume). Cosmetic only;
-  the FSM timer is authoritative.
+  the FSM timer is authoritative. **Unfocused-app gotcha #3 (live-hit
+  2026-08-12):** `TimelineView(.animation)` does NOT tick in an inactive
+  app — the drain must be a plain CA-backed animation
+  (`withAnimation(.linear)` on the mask width), the same mechanism that
+  keeps the record-icon pulse alive in this panel.
 - Hover trigger: **AppKit `NSTrackingArea` with `.activeAlways`** on the
   panel's content view (committed — SwiftUI `onHover` tracking can be
   activation-dependent, and this panel is non-activating in an
