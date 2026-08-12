@@ -94,3 +94,10 @@ re-verifying against live Plaud.
 | Implementation plan (TDD tasks) | [`docs/superpowers/plans/`](docs/superpowers/plans/) |
 | Release notes | [CHANGELOG.md](CHANGELOG.md) |
 | CI (build + test on macOS) | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) |
+
+## Releasing
+
+Version is git-derived: `build-app.sh` reads the marketing version from the
+latest `vX.Y.Z` tag and the build number from the commit count. To cut a
+release: move `## [Unreleased]` in CHANGELOG to `## [X.Y.Z] — <date>`, commit,
+then `git tag vX.Y.Z && git push --tags`. The next build stamps `X.Y.Z`.

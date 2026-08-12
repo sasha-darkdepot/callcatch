@@ -35,7 +35,9 @@ First working version.
   method Electron web content reliably accepts).
 - Verified against Plaud v1.3.7.
 
-## [Unreleased]
+## [0.2.0] — 2026-08-12
+
+Multi-angle review pass: reliability, portability, UX, and security hardening.
 
 ### Fixed / hardened (multi-angle review pass)
 - Stop now sets `AXManualAccessibility` on Plaud's app element before hit-testing,
