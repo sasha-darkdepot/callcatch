@@ -28,8 +28,10 @@ enum UserIdExtractor {
             .filter { $0.lastPathComponent.hasPrefix("log-") && $0.pathExtension == "log" }
             .sorted { $0.lastPathComponent > $1.lastPathComponent }
         for url in logs {
-            if let text = try? String(contentsOf: url, encoding: .utf8),
-               let id = extract(fromLogText: text) {
+            // Lossy-декод, как в PlaudLogTail: один битый байт в строгом UTF-8
+            // молча ронял весь файл — и поиск падал на старый лог со staleid.
+            guard let data = try? Data(contentsOf: url, options: .mappedIfSafe) else { continue }
+            if let id = extract(fromLogText: String(decoding: data, as: UTF8.self)) {
                 return id
             }
         }

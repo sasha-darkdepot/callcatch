@@ -28,8 +28,10 @@ TAG="v$VERSION"
 # --- guards ---------------------------------------------------------------
 [ "$(git branch --show-current)" = "main" ] \
     || { echo "error: releases are cut from 'main'"; exit 1; }
-git diff --quiet && git diff --cached --quiet \
-    || { echo "error: working tree is dirty — commit or stash first"; exit 1; }
+# --porcelain с untracked: неотслеженный Swift-файл собрался бы в бинарь,
+# но не попал бы в тег — релиз лгал бы о своём содержимом (ревью-финдинг).
+[ -z "$(git status --porcelain --untracked-files=all)" ] \
+    || { echo "error: working tree is dirty or has untracked files — commit or stash first"; exit 1; }
 git rev-parse "$TAG" >/dev/null 2>&1 \
     && { echo "error: tag $TAG already exists"; exit 1; }
 git fetch -q origin main
@@ -49,6 +51,11 @@ fi
 # --- verify ---------------------------------------------------------------
 echo "==> running tests"
 swift test >/dev/null
+
+# Сборочный гейт ДО тега и пуша: упавшая сборка/подпись не должна оставлять
+# опубликованный тег без установленного релиза (ревью-финдинг, два ревьюера).
+echo "==> build gate (pre-tag)"
+MARKETING_VERSION="$VERSION" bash scripts/build-app.sh >/dev/null
 
 # --- roll the changelog ---------------------------------------------------
 echo "==> rolling CHANGELOG: [Unreleased] -> [$VERSION]"

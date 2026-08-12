@@ -30,6 +30,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate {
     var sigusr2Source: DispatchSourceSignal?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Single-instance: два экземпляра — это два независимых lease, дублированные
+        // deep link'и и параллельные HID-клики в Plaud (ревью нашёл два живых
+        // процесса одновременно — наследие ручных запусков поверх login item).
+        let me = ProcessInfo.processInfo.processIdentifier
+        let others = NSRunningApplication
+            .runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "dev.sasha.callcatch")
+            .filter { $0.processIdentifier != me }
+        if !others.isEmpty {
+            Log.info("CallCatch: another instance is running (pid \(others[0].processIdentifier)) — exiting")
+            NSApp.terminate(nil)
+            return
+        }
+
         settings = Settings()
         settings.ensureUserId()
 
@@ -66,7 +79,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate {
                 PlaudAX.requestPermission()
                 self?.appState.recordTapped()
             },
-            onStop: { [weak self] in self?.appState.stopTapped() },
+            onStop: { [weak self] in
+                PlaudAX.requestPermission() // стоп — единственная операция, требующая AX
+                self?.appState.stopTapped()
+            },
             onFindUserId: { [weak self] in
                 self?.settings.rescanUserId()
                 self?.appState.refreshMenu()

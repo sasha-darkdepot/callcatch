@@ -26,8 +26,15 @@ enum Log {
     // два FileHandle к одному offset иначе затирают друг друга (потеря строк).
     private static let queue = DispatchQueue(label: "dev.sasha.callcatch.log")
 
+    // Под XCTest файл не трогаем: FSM-тесты успели налить в реальный лог сотни
+    // синтетических «start confirmed» — след для поддержки должен оставаться
+    // правдой (ревью-финдинг). NSLog остаётся для видимости в тестовом выводе.
+    private static let underTests =
+        ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
+
     private static func write(_ message: String) {
         NSLog("%@", message)
+        if underTests { return }
         let line = "\(formatter.string(from: Date())) \(message)\n"
         guard let data = line.data(using: .utf8) else { return }
         queue.async {
@@ -41,7 +48,10 @@ enum Log {
                 _ = try? h.seekToEnd()
                 try? h.write(contentsOf: data)
             } else {
-                try? data.write(to: url)
+                // Fallback БЕЗ затирания лога и без потери 0600: одиночная строка
+                // не должна заменить собой весь файл (ревью-финдинг).
+                fm.createFile(atPath: url.path, contents: data,
+                              attributes: [.posixPermissions: 0o600])
             }
         }
     }

@@ -16,7 +16,7 @@ Plaud (see Gotchas). Verified against **Plaud v1.3.7, macOS 26+**.
 ## Commands
 
 ```bash
-swift test                                    # 80 unit tests — run before declaring work done
+swift test                                    # 100 unit tests — run before declaring work done
 swift test --filter AppStateTests/testFoo     # a single test
 swift build                                   # debug build
 INSTALL=1 bash scripts/build-app.sh           # signed .app → /Applications/Call Catch.app
@@ -66,9 +66,20 @@ re-verifying against live Plaud.
   the `IsRunningInput` listener does not fire for every app. Don't drop the poll.
 - Permissions survive rebuilds only because the app is **code-signed with a
   stable identity**; ad-hoc signing resets Accessibility on every build.
-- **UI strings are English** and the bubble is Liquid Glass (macOS 26
-  `glassEffect`, Lucide icons vendored in `LucideIcons.swift`) — the platform
-  floor is 26.0; don't reintroduce `#available` shims for older macOS.
+- **UI strings are English** and the bubble is Liquid Glass (AppKit
+  `NSGlassEffectView`, Lucide icons vendored in `LucideIcons.swift`) — the
+  platform floor is 26.0; don't reintroduce `#available` shims for older macOS.
+- **The unfocused-app family (all live-hit):** this accessory app is NEVER
+  active and its panel is never key, so (1) SwiftUI `.glassEffect` degrades to
+  flat blur — glass must be AppKit `NSGlassEffectView`; (2) system button
+  styles render dimmed — bubble controls are hand-drawn, with
+  `.environment(\.controlActiveState, .key)`; (3) `TimelineView(.animation)`
+  and animation schedules are unreliable — continuous visuals (the auto-stop
+  drain) run on plain Timers in RunLoop `.common`. Don't "simplify" any of
+  these back to the idiomatic SwiftUI form without live-testing unfocused.
+- **Two time seams in `AppState`**: the injected scheduler closure AND the
+  injected monotonic clock `now()` (hover-pause remainders). New time-based
+  logic must use them — never `Date()`/`Timer` inside the FSM.
 
 ## Boundaries
 

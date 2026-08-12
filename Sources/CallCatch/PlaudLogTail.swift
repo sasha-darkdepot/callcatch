@@ -68,6 +68,36 @@ final class PlaudLogTail {
         textSince(cp).contains(needle)
     }
 
+    /// Как containsLine, но при промахе возвращает ПРОДВИНУТЫЙ checkpoint:
+    /// потреблено всё до последнего перевода строки (недописанная строка ждёт
+    /// следующего тика). Без этого секундный поллер перечитывал растущий хвост
+    /// целиком каждый тик — квадратичная стоимость на длинных записях
+    /// (ревью-финдинг, cross-model). needle не содержит \n, поэтому не может
+    /// пересечь границу потребления.
+    func scanForLine(_ needle: String, since cp: LogCheckpoint) -> (found: Bool, next: LogCheckpoint) {
+        let today = todayLogURL()
+        var text = read(url: cp.fileURL, from: cp.offset)
+        var nextURL = cp.fileURL
+        var nextBase = cp.offset
+        if today != cp.fileURL {
+            // Полуночный перекат: дочитали старый файл, дальше следим за сегодняшним.
+            let todayText = read(url: today, from: 0)
+            if text.contains(needle) || todayText.contains(needle) { return (true, cp) }
+            nextURL = today
+            nextBase = 0
+            text = todayText
+        } else if text.contains(needle) {
+            return (true, cp)
+        }
+        guard let lastNewline = text.lastIndex(of: "\n") else {
+            return (false, LogCheckpoint(fileURL: nextURL, offset: nextBase))
+        }
+        let consumed = UInt64(text[...lastNewline].utf8.count)
+        // При усечении файла read() сам начал с нуля, и offset может «переехать»
+        // размер — следующий read это заметит и снова прочтёт с начала (самолечение).
+        return (false, LogCheckpoint(fileURL: nextURL, offset: nextBase + consumed))
+    }
+
     private func read(url: URL, from offset: UInt64) -> String {
         guard let h = try? FileHandle(forReadingFrom: url) else { return "" }
         defer { try? h.close() }

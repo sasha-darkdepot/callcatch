@@ -152,16 +152,22 @@ final class AppStateTests: XCTestCase {
         XCTAssertFalse(log.menu.last!.canStop)
     }
 
-    func testCallEndDuringPendingAborts() {
+    func testCallEndDuringPendingReconcilesLateSuccess() {
+        // Deep link уже ушёл — поздний успех не должен родить запись-сироту
+        // без стопа (ревью-финдинг, cross-model). Pending переживает конец
+        // звонка тихо (без новых ретраев), поздний успех подхватывается.
         let s = makeState()
         s.callStarted(app: .discord)
         s.recordTapped()
         s.callEnded(app: .discord)
         XCTAssertEqual(log.bubbles.last, .hidden)
+        let sentBefore = plaud.deepLinksSent
+        scheduler.fireAll(delay: 5) // ретраи отменены — новых deep link'ов нет
+        XCTAssertEqual(plaud.deepLinksSent, sentBefore)
         plaud.outcome = .success(recordingId: "9")
         s.tickPollStart()
-        XCTAssertEqual(log.bubbles.last, .hidden)
-        XCTAssertFalse(log.menu.last!.canStop)
+        XCTAssertEqual(log.bubbles.last, .callEndedOfferStop(app: .discord))
+        XCTAssertTrue(log.menu.last!.canStop)
     }
 
     func testOwnerCallEndOffersStop() {
@@ -421,6 +427,9 @@ final class AppStateTests: XCTestCase {
         s.callStarted(app: .telegram)
         s.callEnded(app: .discord) // владелец вышел, telegram ещё активен
         XCTAssertFalse(log.bubbles.contains(.callEndedAutoStop(app: .discord)))
+        XCTAssertEqual(log.bubbles.last, .callEndedOfferStop(app: .discord)) // ручное предложение остаётся
+        scheduler.fireAll(delay: 10)
+        XCTAssertEqual(plaud.axStopCalls, 0) // и главное — живой звонок не режем
     }
 
     func testCrossAppRearmAfterSupersedingCallEnds() {
@@ -542,5 +551,249 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(log.bubbles.last, .callEndedOfferStop(app: .discord))
         scheduler.fireAll(delay: 10)
         XCTAssertEqual(plaud.axStopCalls, 0)
+    }
+
+    // MARK: - Auto-stop: гонки со стопом-в-полёте (экспертное ревью)
+
+    func testCountdownDoesNotArmWhileStopIsInFlight() {
+        let s = makeAutoRecordingState()
+        plaud.axStopAsync = true
+        s.stopTapped() // AX-клик полетел, займёт секунды
+        XCTAssertEqual(log.bubbles.last, .stopping)
+        s.callEnded(app: .discord) // дебаунс конца звонка догнал посреди стопа
+        XCTAssertFalse(log.bubbles.contains(.callEndedAutoStop(app: .discord))) // не «мёртвая» тающая кнопка
+        XCTAssertEqual(log.bubbles.last, .stopping)
+        plaud.pendingStopCompletions.removeFirst()(false) // стоп провалился → stopFailed
+        XCTAssertEqual(log.bubbles.last, .stopFailed)
+        scheduler.fireAll(delay: 10) // никакой выживший отсчёт не кликает второй раз
+        XCTAssertEqual(plaud.axStopCalls, 1)
+    }
+
+    func testUnattendedRetryNotScheduledWhenNewCallArrivesMidStop() {
+        let s = makeAutoRecordingState()
+        s.callEnded(app: .discord)
+        plaud.axStopAsync = true
+        scheduler.fireAll(delay: 10) // авто-стоп кликает
+        s.callStarted(app: .telegram) // новый звонок, пока клик летел
+        plaud.pendingStopCompletions.removeFirst()(false) // клик провалился
+        scheduler.fireAll(delay: 5) // ретрай НЕ должен был взводиться
+        XCTAssertEqual(plaud.axStopCalls, 1)
+        XCTAssertEqual(log.bubbles.last,
+                       .callDetected(app: .telegram, recordDisabledReason: "Plaud is already recording"))
+    }
+
+    func testStoppingBubbleClearedWhenRecordingEndsExternallyMidRetryWait() {
+        let s = makeAutoRecordingState()
+        s.callEnded(app: .discord)
+        plaud.axStopResult = false
+        scheduler.fireAll(delay: 10) // первый клик провалился, ретрай ждёт 5 с
+        XCTAssertEqual(log.bubbles.last, .stopping)
+        plaud.recordingStoppedExternally = true
+        s.tickPollStart() // человек остановил в самом Plaud
+        XCTAssertEqual(log.bubbles.last, .hidden) // спиннер не висит вечно
+        scheduler.fireAll(delay: 5)
+        XCTAssertEqual(plaud.axStopCalls, 1) // ретрай отменён
+    }
+
+    func testStoppingBubbleClearedWhenPlaudQuitsMidRetryWait() {
+        let s = makeAutoRecordingState()
+        s.callEnded(app: .discord)
+        plaud.axStopResult = false
+        scheduler.fireAll(delay: 10)
+        plaud.running = false
+        s.tickPollStart()
+        XCTAssertEqual(log.bubbles.last, .hidden)
+        scheduler.fireAll(delay: 5)
+        XCTAssertEqual(plaud.axStopCalls, 1)
+    }
+
+    func testUnattendedRetryCancelledByExternalStop() {
+        let s = makeAutoRecordingState()
+        s.callEnded(app: .discord)
+        plaud.axStopResult = false
+        scheduler.fireAll(delay: 10)
+        plaud.recordingStoppedExternally = true
+        s.tickPollStart()
+        scheduler.fireAll(delay: 5)
+        XCTAssertEqual(plaud.axStopCalls, 1)
+        XCTAssertFalse(log.menu.last!.canStop)
+    }
+
+    // MARK: - Auto-stop: липкий ✕ и обходные пути настройки
+
+    func testKeepRecordingIsStickyAcrossLaterCalls() {
+        let s = makeAutoRecordingState()
+        s.callEnded(app: .discord)
+        s.dismissTapped() // явное «оставить запись»
+        s.callStarted(app: .telegram)
+        s.callEnded(app: .telegram) // следующий звонок не перечёркивает решение
+        XCTAssertEqual(log.bubbles.last, .callEndedOfferStop(app: .discord)) // ручное предложение вместо отсчёта
+        scheduler.fireAll(delay: 10)
+        XCTAssertEqual(plaud.axStopCalls, 0)
+    }
+
+    func testAutoStopBubbleRecoversWhenSettingFlippedBehindMenusBack() {
+        let s = makeAutoRecordingState()
+        s.callEnded(app: .discord)
+        autoStopMode = false // defaults write мимо меню — autoStopToggled НЕ вызван
+        scheduler.fireAll(delay: 10)
+        XCTAssertEqual(plaud.axStopCalls, 0) // перепроверка настройки на файере
+        XCTAssertEqual(log.bubbles.last, .callEndedOfferStop(app: .discord)) // не «дотаявший» мёртвый бабл
+    }
+
+    func testAutoStopSkippedWhenPlaudNotRunningAtFire() {
+        let s = makeAutoRecordingState()
+        s.callEnded(app: .discord)
+        plaud.running = false
+        scheduler.fireAll(delay: 10)
+        XCTAssertEqual(plaud.axStopCalls, 0)
+        XCTAssertEqual(log.bubbles.last, .hidden)
+        XCTAssertFalse(log.menu.last!.canStop)
+    }
+
+    func testStopTappedDuringCountdownKillsCountdownEvenIfClickFails() {
+        let s = makeAutoRecordingState()
+        s.callEnded(app: .discord)
+        plaud.axStopResult = false
+        s.stopTapped() // ручной стоп провалился → stopFailed (attended-путь)
+        XCTAssertEqual(log.bubbles.last, .stopFailed)
+        scheduler.fireAll(delay: 10) // отсчёт мёртв — второго клика нет
+        XCTAssertEqual(plaud.axStopCalls, 1)
+    }
+
+    func testSecondAutoStopCycleGetsItsOwnSilentRetry() {
+        let s = makeAutoRecordingState()
+        s.callEnded(app: .discord)
+        plaud.axStopResult = false
+        scheduler.fireAll(delay: 10)
+        scheduler.fireAll(delay: 5) // цикл 1: клик + ретрай, оба мимо
+        XCTAssertEqual(plaud.axStopCalls, 2)
+        XCTAssertEqual(plaud.openedWindow, 1)
+        plaud.recordingStoppedExternally = true
+        s.tickPollStart() // человек добил руками — lease свободен
+        plaud.axStopResult = true
+        s.callStarted(app: .telegram)
+        scheduler.fireAll(delay: 7) // авто-старт второй записи
+        plaud.outcome = .success(recordingId: "77")
+        s.tickPollStart()
+        plaud.axStopResult = false
+        s.callEnded(app: .telegram)
+        scheduler.fireAll(delay: 10) // цикл 2: первый клик мимо
+        XCTAssertEqual(plaud.openedWindow, 1) // человека ещё не зовём — ретрай свой, свежий
+        scheduler.fireAll(delay: 5)
+        XCTAssertEqual(plaud.openedWindow, 2)
+    }
+
+    // MARK: - Auto-stop: ховер-пауза, композиции
+
+    func testHoverPausedCountdownIgnoresOriginalWindowTimer() {
+        let s = makeAutoRecordingState()
+        s.callEnded(app: .discord)
+        clock.now = 3
+        s.autoStopHoverChanged(hovering: true)
+        scheduler.fireAll(delay: 10) // отменённый исходный таймер молчит
+        XCTAssertEqual(plaud.axStopCalls, 0)
+        XCTAssertEqual(log.bubbles.last, .callEndedAutoStop(app: .discord))
+    }
+
+    func testTwoPauseResumeCyclesAccumulateExactly() {
+        let s = makeAutoRecordingState()
+        s.callEnded(app: .discord) // armed при 0
+        clock.now = 3
+        s.autoStopHoverChanged(hovering: true)  // остаток 7
+        clock.now = 5
+        s.autoStopHoverChanged(hovering: false) // таймер на 7
+        clock.now = 9
+        s.autoStopHoverChanged(hovering: true)  // остаток 7-(9-5)=3
+        clock.now = 20
+        s.autoStopHoverChanged(hovering: false) // пауза не утекает: таймер на 3
+        XCTAssertEqual(scheduler.timers.last?.delay ?? -1, 3, accuracy: 0.001)
+        scheduler.fireAll(delay: 3)
+        XCTAssertEqual(plaud.axStopCalls, 1)
+    }
+
+    func testDismissDuringHoverPauseKeepsLease() {
+        let s = makeAutoRecordingState()
+        s.callEnded(app: .discord)
+        clock.now = 4
+        s.autoStopHoverChanged(hovering: true)
+        s.dismissTapped() // ✕ прямо во время паузы
+        XCTAssertEqual(log.bubbles.last, .recordingContinues)
+        s.autoStopHoverChanged(hovering: false) // унховер не оживляет мертвеца
+        scheduler.fireAll(delay: 10)
+        scheduler.fireAll(delay: 6)
+        XCTAssertEqual(plaud.axStopCalls, 0)
+        s.stopTapped()
+        XCTAssertEqual(plaud.axStopCalls, 1) // lease жив
+    }
+
+    func testExternalStopDuringHoverPauseThenUnhoverIsNoOp() {
+        let s = makeAutoRecordingState()
+        s.callEnded(app: .discord)
+        clock.now = 4
+        s.autoStopHoverChanged(hovering: true)
+        plaud.recordingStoppedExternally = true
+        s.tickPollStart()
+        s.autoStopHoverChanged(hovering: false)
+        scheduler.fireAll(delay: 10)
+        scheduler.fireAll(delay: 6)
+        XCTAssertEqual(plaud.axStopCalls, 0)
+    }
+
+    func testDuplicateCallEndedWhilePausedPreservesRemainder() {
+        let s = makeAutoRecordingState()
+        s.callEnded(app: .discord)
+        clock.now = 4
+        s.autoStopHoverChanged(hovering: true)
+        s.callEnded(app: .discord) // поздний дубль конца звонка
+        XCTAssertEqual(log.bubbles.last, .callEndedAutoStop(app: .discord)) // не пере-взведён с нуля
+        s.autoStopHoverChanged(hovering: false)
+        XCTAssertEqual(scheduler.timers.last?.delay ?? -1, 6, accuracy: 0.001) // остаток пережил дубль
+        scheduler.fireAll(delay: 6)
+        XCTAssertEqual(plaud.axStopCalls, 1)
+    }
+
+    func testThreeWayOverlapArmsOnceAtLastEnd() {
+        let s = makeAutoRecordingState()
+        s.callStarted(app: .telegram)
+        s.callStarted(app: .signal)
+        s.callEnded(app: .discord)
+        s.callEnded(app: .telegram)
+        XCTAssertFalse(log.bubbles.contains(.callEndedAutoStop(app: .discord)))
+        s.callEnded(app: .signal) // последний вышел
+        XCTAssertEqual(log.bubbles.filter { $0 == .callEndedAutoStop(app: .discord) }.count, 1)
+        scheduler.fireAll(delay: 10)
+        XCTAssertEqual(plaud.axStopCalls, 1)
+    }
+
+    // MARK: - Поздний успех старта и привязка AX-watch
+
+    func testLateSuccessAfterCallEndArmsAutoStop() {
+        autoMode = true
+        autoStopMode = true
+        let s = makeState()
+        s.callStarted(app: .discord)
+        scheduler.fireAll(delay: 7) // авто-старт улетел
+        s.callEnded(app: .discord)  // звонок кончился до подтверждения
+        plaud.outcome = .success(recordingId: "9")
+        s.tickPollStart() // поздний успех — сирота недопустима
+        XCTAssertEqual(log.bubbles.last, .callEndedAutoStop(app: .discord))
+        scheduler.fireAll(delay: 10)
+        XCTAssertEqual(plaud.axStopCalls, 1) // запись остановлена сама
+    }
+
+    func testAXWatchBoundToItsRecording() {
+        let s = makeRecordingState() // rid 42, ручная
+        plaud.axStopResult = false
+        s.stopTapped() // стоп мимо → stopFailed + AX watch на rid 42
+        plaud.recordingStoppedExternally = true
+        s.tickPollStart() // запись 42 добита в Plaud, lease свободен
+        s.callStarted(app: .telegram)
+        s.recordTapped()
+        plaud.outcome = .success(recordingId: "77")
+        s.tickPollStart() // живая запись 77
+        plaud.axRecordingVisible = false // «виджета не видно» — момент между стартом и появлением
+        scheduler.fireAll(delay: 10) // протухший watch (для 42) тикает
+        XCTAssertTrue(log.menu.last!.canStop) // запись 77 НЕ освобождена чужим watch'ем
     }
 }

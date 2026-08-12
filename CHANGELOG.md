@@ -12,12 +12,35 @@ them into a dated, tagged version (see "Versioning & releases" in the README).
 ### Added
 - **Auto-stop**: a recording that started automatically now stops itself
   10 s after CallCatch detects the call end. The bubble's red button drains
-  as the countdown — click stops now, hovering pauses (with a parked-cursor
-  failsafe), ✕ keeps recording ("Recording continues" notice). Arms only
-  when the last active call ends (cross-app overlaps re-arm correctly);
-  external stops, new calls, and toggling the feature off all cancel it;
-  an unattended stop failure gets one silent retry before the manual
-  fallback. Menu toggle "Auto-stop", on by default.
+  as the countdown — click stops now, hovering pauses (a cursor parked
+  motionless for 30 s counts as absent and the countdown resumes), ✕ keeps
+  recording for good ("Recording continues"; later calls don't override the
+  choice). Arms only when the last active call ends (cross-app overlaps
+  re-arm correctly); external stops, new calls, an in-flight stop, and
+  toggling the feature off all cancel it; an unattended stop failure gets
+  one silent retry before the manual fallback. Menu toggle "Auto-stop", on
+  by default.
+
+### Fixed / hardened (six-expert review pass: 5× Opus 5 + GPT-5.6-sol)
+- Race fixes around in-flight AX stops: the countdown never arms over a stop
+  in progress; a failed unattended stop never retries into a new call; a
+  stop finishing externally mid-retry no longer strands the "Stopping…"
+  bubble.
+- A start confirmed after its call already ended is reconciled (auto-stop or
+  stop offer) instead of becoming an orphan recording nobody tracks.
+- The AX fallback watch is bound to its own recording and can no longer
+  release a newer recording's lease.
+- Single-instance guard (a second copy exits instead of double-clicking
+  Plaud); synthetic HID clicks strip physically held modifier keys.
+- The `plaud://` deep link (carrying user_id) is sent to Plaud directly, not
+  to whatever app owns the URL scheme; stop-detection log polling is now
+  incremental instead of re-reading the growing log tail every second.
+- Unit tests no longer pollute `~/Library/Logs/CallCatch.log`; the log
+  fallback path can't truncate the file or drop its 0600 permissions;
+  `--test-bubble` screen-capture visibility now also requires
+  `CALLCATCH_DEBUG=1`.
+- `release.sh` refuses untracked files and builds before tagging;
+  `build-app.sh` installs atomically and stamps the toolchain.
 
 ### Changed
 - The mute limitation is now consequential: a long mute in a
