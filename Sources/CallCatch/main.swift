@@ -17,8 +17,8 @@ func makeScheduler() -> (TimeInterval, @escaping () -> Void) -> Cancellable {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate {
-    static let userIdMissingMessage = "user_id не найден: открой web.plaud.ai, нажми Record, затем «Найти user_id заново»"
-    static let axMissingMessage = "Выдай доступ Accessibility в System Settings — нужен для остановки записи"
+    static let userIdMissingMessage = "user_id not found: open web.plaud.ai, press Record, then \"Find user_id Again\""
+    static let axMissingMessage = "Grant Accessibility access in System Settings — needed to stop recordings"
 
     var settings: Settings!
     var appState: AppState!
@@ -104,10 +104,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate {
             sigusr2Source = src
 
             if CommandLine.arguments.contains("--test-bubble") {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
-                    self?.appState.callStarted(app: .telegram)
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 15) {
-                        self?.appState.callEnded(app: .telegram)
+                // Дебаг-циклер: гоняет бабл по всем видимым состояниям напрямую,
+                // мимо FSM — единственный способ увидеть Error-шаблоны и caption
+                // без реальных сбоев Plaud. Только под CALLCATCH_DEBUG=1.
+                let states: [BubbleState] = [
+                    .callDetected(app: .discord, recordDisabledReason: nil),
+                    .callDetected(app: .discord, recordDisabledReason: "Plaud is already recording"),
+                    .starting(app: .discord, launchingPlaud: true),
+                    .starting(app: .discord, launchingPlaud: false),
+                    .recordingStarted,
+                    .callEndedOfferStop(app: .discord),
+                    .stopping,
+                    .stopped,
+                    .startFailed,
+                    .stopFailed,
+                    .hidden,
+                ]
+                for (i, state) in states.enumerated() {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1 + Double(i) * 3) { [weak self] in
+                        Log.info("test-bubble: \(state)")
+                        self?.bubble.show(state: state)
                     }
                 }
             }

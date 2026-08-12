@@ -27,7 +27,11 @@ final class BubbleWindow {
             panel?.orderOut(nil)
             return
         }
-        let content = BubbleView(state: state, onRecord: onRecord, onStop: onStop,
+        // Entrance-анимация только при появлении с нуля: контент пересоздаётся
+        // на каждую смену состояния, и без флага spring переигрывался бы всякий раз.
+        let isNewAppearance = !(panel?.isVisible ?? false)
+        let content = BubbleView(state: state, isNewAppearance: isNewAppearance,
+                                 onRecord: onRecord, onStop: onStop,
                                  onOpenPlaud: onOpenPlaud, onDismiss: onDismiss)
         let hosting = NSHostingView(rootView: content)
         let p = panel ?? makePanel()
@@ -44,7 +48,7 @@ final class BubbleWindow {
             ?? NSScreen.main
         if let screen {
             let x = screen.visibleFrame.midX - size.width / 2
-            let y = screen.visibleFrame.minY + 80
+            let y = screen.visibleFrame.minY + 80 - 12 // 12 = прозрачное поле BubbleView
             p.setFrameOrigin(NSPoint(x: x, y: y))
         }
         p.orderFrontRegardless()
@@ -58,69 +62,130 @@ final class BubbleWindow {
                         backing: .buffered, defer: false)
         p.level = .statusBar
         p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        p.sharingType = .none
+        // .none: бабл не светится в захвате экрана (шеринг на созвонах).
+        // В режиме --test-bubble наоборот нужен на скриншотах — для visual-проверок.
+        p.sharingType = CommandLine.arguments.contains("--test-bubble") ? .readOnly : .none
         p.isOpaque = false
         p.backgroundColor = .clear
-        p.hasShadow = true
+        p.hasShadow = false // стекло рисует глубину само — панельная тень дала бы дубль
         p.hidesOnDeactivate = false
         p.isReleasedWhenClosed = false
         return p
     }
 }
 
+/// Контент бабла: Liquid Glass капсула, 4 шаблона (Action / Progress / Notice /
+/// Error) + caption-пилл над капсулой для причины недоступности записи.
 struct BubbleView: View {
     let state: BubbleState
+    let isNewAppearance: Bool
     let onRecord: () -> Void
     let onStop: () -> Void
     let onOpenPlaud: () -> Void
     let onDismiss: () -> Void
 
+    @State private var appeared = false
+
     var body: some View {
-        HStack(spacing: 12) {
-            switch state {
-            case .hidden:
-                EmptyView()
-            case let .callDetected(app, disabledReason):
-                Text("📞 Звонок в \(app.displayName)")
-                Button("Записать в Plaud", action: onRecord)
-                    .disabled(disabledReason != nil)
-                    .help(disabledReason ?? "")
+        GlassEffectContainer(spacing: 8) {
+            VStack(spacing: 8) {
                 if let reason = disabledReason {
-                    Text(reason).font(.caption).foregroundStyle(.secondary)
+                    Text(reason)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 4)
+                        .glassEffect(.regular, in: .capsule)
                 }
-                dismissButton
-            case let .starting(_, launching):
-                ProgressView().controlSize(.small)
-                Text(launching ? "Запускаю Plaud…" : "Запускаю запись…")
-            case .recordingStarted:
-                Text("🔴 Запись начата")
-            case .startFailed:
-                Text("⚠️ Запись не началась")
-                Button("Открыть Plaud", action: onOpenPlaud)
-                dismissButton
-            case let .callEndedOfferStop(app):
-                Text("✅ Звонок в \(app.displayName) завершён")
-                Button("Остановить запись", action: onStop)
-                dismissButton
-            case .stopping:
-                ProgressView().controlSize(.small)
-                Text("Останавливаю…")
-            case .stopped:
-                Text("Запись остановлена")
-            case .stopFailed:
-                Text("⚠️ Останови запись в Plaud вручную")
-                Button("Открыть Plaud", action: onOpenPlaud)
-                dismissButton
+                HStack(spacing: 11) { content }
+                    .padding(.vertical, 11)
+                    .padding(.leading, 18)
+                    .padding(.trailing, 12)
+                    .glassEffect(.regular.interactive(), in: .capsule)
             }
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 12)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+        .padding(12) // прозрачное поле: запас для spring — панель обрезает по своему фрейму
+        .scaleEffect(appeared ? 1 : 0.86)
+        .offset(y: appeared ? 0 : 10)
+        .opacity(appeared ? 1 : 0)
+        .onAppear {
+            if isNewAppearance {
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.68)) { appeared = true }
+            } else {
+                appeared = true // смена состояния: entrance не переигрываем
+            }
+        }
         .fixedSize()
     }
 
+    private var disabledReason: String? {
+        if case let .callDetected(_, reason) = state { return reason }
+        return nil
+    }
+
+    @ViewBuilder private var content: some View {
+        switch state {
+        case .hidden:
+            EmptyView()
+        case let .callDetected(app, reason):
+            actionRow(icon: .phone, tint: .green, text: "Call in \(app.displayName)",
+                      button: "Record in Plaud", disabled: reason != nil, action: onRecord)
+        case let .starting(_, launchingPlaud):
+            progressRow(launchingPlaud ? "Starting Plaud…" : "Starting…")
+        case .recordingStarted:
+            noticeRow(icon: .disc, tint: .red, text: "Recording started", pulse: true)
+        case .startFailed:
+            errorRow("Recording didn’t start")
+        case let .callEndedOfferStop(app):
+            actionRow(icon: .circleCheck, tint: .green, text: "Call in \(app.displayName) ended",
+                      button: "Stop Recording", disabled: false, action: onStop)
+        case .stopping:
+            progressRow("Stopping…")
+        case .stopped:
+            noticeRow(icon: .circleCheck, tint: .green, text: "Recording stopped", pulse: false)
+        case .stopFailed:
+            errorRow("Stop the recording in Plaud manually")
+        }
+    }
+
+    @ViewBuilder
+    private func actionRow(icon: Lucide, tint: Color, text: String,
+                           button: String, disabled: Bool, action: @escaping () -> Void) -> some View {
+        LucideIcon(icon, tint: tint)
+        bubbleText(text)
+        Button(button, action: action)
+            .buttonStyle(.glassProminent)
+            .tint(.red)
+            .disabled(disabled)
+        dismissButton
+    }
+
+    @ViewBuilder private func progressRow(_ text: String) -> some View {
+        ProgressView().controlSize(.small)
+        bubbleText(text)
+    }
+
+    @ViewBuilder
+    private func noticeRow(icon: Lucide, tint: Color, text: String, pulse: Bool) -> some View {
+        LucideIcon(icon, tint: tint, pulsing: pulse)
+        bubbleText(text)
+    }
+
+    @ViewBuilder private func errorRow(_ text: String) -> some View {
+        LucideIcon(.triangleAlert, tint: .yellow)
+        bubbleText(text)
+        Button("Open Plaud", action: onOpenPlaud)
+            .buttonStyle(.glass)
+        dismissButton
+    }
+
+    private func bubbleText(_ s: String) -> some View {
+        Text(s).font(.system(size: 13, weight: .medium))
+    }
+
     private var dismissButton: some View {
-        Button(action: onDismiss) { Image(systemName: "xmark") }
-            .buttonStyle(.plain)
+        Button(action: onDismiss) { LucideIcon(.x, tint: .primary, size: 11) }
+            .buttonStyle(.glass)
+            .buttonBorderShape(.circle)
     }
 }

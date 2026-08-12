@@ -261,8 +261,8 @@ final class AppState: CallEventDelegate {
     }
 
     private func recordDisabledReason() -> String? {
-        if lease != .idle { return "Plaud уже пишет" }
-        if !userIdAvailable() { return "user_id не найден" }
+        if lease != .idle { return "Plaud is already recording" }
+        if !userIdAvailable() { return "user_id not found" }
         return nil
     }
 

@@ -9,7 +9,18 @@ them into a dated, tagged version (see "Versioning & releases" in the README).
 
 ## [Unreleased]
 
-_Nothing yet._
+### Changed
+- Entire UI is now English (menu, bubble, attention messages).
+- Bubble redesigned as native Liquid Glass (macOS 26 `glassEffect`): capsule
+  with 4 content templates, Lucide icons, glass buttons, entrance animation;
+  disabled-reason moved to a caption pill above the capsule; "Starting Plaud…"
+  kept as the cold-start cue.
+- Menu attention item uses an SF Symbol image instead of the "⚠️" prefix.
+- `--test-bubble` (debug) now cycles every visible bubble state, bypassing the
+  FSM, and makes the bubble visible to screen capture for visual checks.
+
+### Breaking
+- Minimum macOS raised from 14.4 to 26.0; CI moved to the macos-26 image.
 
 ## [0.2.0] — 2026-08-12
 
