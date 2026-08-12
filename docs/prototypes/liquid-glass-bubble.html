@@ -194,7 +194,7 @@
 <div class="page">
   <div class="header">
     <h1>CallCatch — Liquid Glass bubble</h1>
-    <small>EN UI · macOS 26+ glassEffect · прототип v2</small>
+    <small>EN UI · macOS 26+ glassEffect · Lucide icons · прототип v3</small>
   </div>
   <p class="note">
     CSS-приближение: в приложении будет <b>нативный</b> Liquid Glass (рефракция, динамический тинт, системные блики).
@@ -223,11 +223,14 @@
 </div>
 
 <script>
+/* Lucide icons (ISC) — stroke 2, round caps/joins, ported verbatim */
+const lucide = (c, extra, body) =>
+  `<svg class="icon ${extra}" viewBox="0 0 24 24" fill="none" stroke="${c}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
 const ICONS = {
-  phone: c => `<svg class="icon" viewBox="0 0 24 24" fill="${c}"><path d="M20.01 15.38c-1.23 0-2.42-.2-3.53-.56a.98.98 0 0 0-1.01.24l-1.57 1.97c-2.83-1.35-5.48-3.9-6.89-6.83l1.95-1.66c.27-.28.35-.67.24-1.02-.37-1.11-.56-2.3-.56-3.53 0-.54-.45-.99-.99-.99H4.19C3.65 3 3 3.24 3 3.99 3 13.28 10.73 21 20.01 21c.71 0 .99-.63.99-1.18v-3.45c0-.54-.45-.99-.99-.99z"/></svg>`,
-  record: c => `<svg class="icon pulse" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="${c}" stroke-width="2.2"/><circle cx="12" cy="12" r="4.6" fill="${c}"/></svg>`,
-  check: c => `<svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10" fill="${c}"/><path d="M7.5 12.5l3 3 6-6.5" fill="none" stroke="rgba(0,0,0,.55)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
-  warn: c => `<svg class="icon" viewBox="0 0 24 24"><path d="M12 2.5 22.5 21h-21L12 2.5z" fill="${c}"/><rect x="11" y="9" width="2" height="6" rx="1" fill="rgba(0,0,0,.6)"/><circle cx="12" cy="17.6" r="1.2" fill="rgba(0,0,0,.6)"/></svg>`,
+  phone: c => lucide(c, '', `<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>`),
+  record: c => lucide(c, 'pulse', `<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="2.5" fill="${c}"/>`),
+  check: c => lucide(c, '', `<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>`),
+  warn: c => lucide(c, '', `<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 20h16a2 2 0 0 0 1.73-2Z"/><path d="M12 9v4"/><path d="M12 17h.01"/>`),
   x: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M5 5l14 14M19 5L5 19"/></svg>`,
 };
 const spinner = `<span class="spinner"></span>`;
@@ -248,6 +251,7 @@ const tpl = {
 const STATES = {
   callDetected:  { html: () => tpl.action(ICONS.phone('var(--green)'), 'Call in Discord', 'Record in Plaud', 'starting') },
   starting:      { html: () => tpl.progress('Starting…') },
+  startingPlaud: { html: () => tpl.progress('Starting Plaud…'), hiddenChip: true },
   recording:     { html: () => tpl.notice(ICONS.record('var(--red)'), 'Recording started') },
   callEnded:     { html: () => tpl.action(ICONS.check('var(--green)'), 'Call in Discord ended', 'Stop Recording', 'stopping') },
   stopping:      { html: () => tpl.progress('Stopping…'), hiddenChip: true },
@@ -286,8 +290,8 @@ function stopFlow() { if (flowTimer) { flowTimer.forEach(clearTimeout); flowTime
 function playFlow() {
   stopFlow();
   const steps = [
-    ['callDetected', 0], ['starting', 2200], ['recording', 3600],
-    ['callEnded', 6300], ['stopping', 8300], ['stopped', 9600], [null, 11400],
+    ['callDetected', 0], ['startingPlaud', 2200], ['starting', 3400], ['recording', 4600],
+    ['callEnded', 7300], ['stopping', 9300], ['stopped', 10600], [null, 12400],
   ];
   flowTimer = steps.map(([s, t]) => setTimeout(() => s ? render(s) : hide(), t));
 }
@@ -314,7 +318,7 @@ document.getElementById('clock').textContent =
 /* gallery grouped by template */
 const GROUPS = [
   ['Action — иконка + текст + главная кнопка + ✕', ['callDetected', 'callEnded', 'alreadyRecording']],
-  ['Progress — спиннер + текст', ['starting', 'stopping']],
+  ['Progress — спиннер + текст', ['startingPlaud', 'starting', 'stopping']],
   ['Notice — иконка + текст, сам исчезает', ['recording', 'stopped']],
   ['Error — предупреждение + Open Plaud + ✕', ['error', 'errorStop']],
 ];
