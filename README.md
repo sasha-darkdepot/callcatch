@@ -64,6 +64,10 @@ bubble offers **Stop recording**. Everything is also in the menu-bar menu:
 - **Record now** — start manually during a call (e.g. if you dismissed the bubble).
 - **Stop recording** — always available while a CallCatch-started recording runs.
 - **Auto-record** — start recording automatically 7 s after a call begins.
+- **Auto-stop** — when a recording started automatically, stop it 10 s after
+  CallCatch detects the call end. The red button in the bubble drains as a
+  countdown: click it to stop now, hover to pause the countdown, ✕ to keep
+  recording. On by default; only ever arms for auto-started recordings.
 - **Launch at login** — register as a login item.
 
 ## How it works
@@ -93,8 +97,12 @@ every rebuild.
   call — a voice message over 7 s will be recorded.
 - The stop click briefly moves the cursor to the widget (the only input
   Electron web content reliably accepts).
-- If Plaud releases the microphone on mute, a long mute can look like the end
-  of a call (harmless — no automatic action is taken on call end).
+- If an app releases the microphone on mute, a long mute can look like the
+  end of a call. With Auto-stop enabled (the default) this stops an
+  auto-started recording ~10 s later, and unmuting then starts a new one —
+  one meeting can end up split into two files with the muted stretch
+  missing. The countdown bubble is your window to intervene (hover pauses,
+  ✕ keeps recording); turn Auto-stop off if your apps mute this way.
 - Verified against Plaud v1.3.7; a Plaud update may require re-checking the
   deep-link and stop behavior.
 
@@ -150,7 +158,7 @@ Sources/CallCatch/
   UserIdExtractor.swift  user_id from Plaud logs
   WatchedApps.swift     the four apps + bundle-id matching
   BubbleWindow / MenuBar / Settings / Log / main
-Tests/CallCatchTests/   61 unit tests (all logic behind protocols)
+Tests/CallCatchTests/   80 unit tests (all logic behind protocols)
 scripts/build-app.sh    build + sign + optional install
 ```
 

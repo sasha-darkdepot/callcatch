@@ -9,7 +9,20 @@ them into a dated, tagged version (see "Versioning & releases" in the README).
 
 ## [Unreleased]
 
-_Nothing yet._
+### Added
+- **Auto-stop**: a recording that started automatically now stops itself
+  10 s after CallCatch detects the call end. The bubble's red button drains
+  as the countdown — click stops now, hovering pauses (with a parked-cursor
+  failsafe), ✕ keeps recording ("Recording continues" notice). Arms only
+  when the last active call ends (cross-app overlaps re-arm correctly);
+  external stops, new calls, and toggling the feature off all cancel it;
+  an unattended stop failure gets one silent retry before the manual
+  fallback. Menu toggle "Auto-stop", on by default.
+
+### Changed
+- The mute limitation is now consequential: a long mute in a
+  mic-releasing app can split one meeting into two recordings (README
+  Limitations rewritten accordingly).
 
 ## [0.3.0] — 2026-08-12
 

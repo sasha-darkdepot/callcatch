@@ -16,7 +16,7 @@ Plaud (see Gotchas). Verified against **Plaud v1.3.7, macOS 26+**.
 ## Commands
 
 ```bash
-swift test                                    # 61 unit tests — run before declaring work done
+swift test                                    # 80 unit tests — run before declaring work done
 swift test --filter AppStateTests/testFoo     # a single test
 swift build                                   # debug build
 INSTALL=1 bash scripts/build-app.sh           # signed .app → /Applications/Call Catch.app
