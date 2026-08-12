@@ -1,4 +1,5 @@
 import AppKit
+import Combine // Timer.publish для drain-тикера (Swift 6.4 предупреждает без явного импорта)
 import SwiftUI
 
 /// Плавающий бабл внизу по центру экрана. Non-activating (не крадёт фокус),
