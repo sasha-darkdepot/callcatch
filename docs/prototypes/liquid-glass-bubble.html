@@ -132,6 +132,10 @@
     to   { transform: translateY(0)    scale(1);   opacity:1; }
   }
   .bubble .icon { width:17px; height:17px; flex:none; display:block; }
+  .bubble .countdown {
+    color:var(--text-dim); font-size:12px; font-weight:400;
+    font-variant-numeric: tabular-nums; /* цифры не прыгают при отсчёте */
+  }
 
   .pulse { animation: pulse 1.6s ease-in-out infinite; }
   @keyframes pulse { 0%,100% { opacity:1; transform:scale(1);} 50% { opacity:.55; transform:scale(.88);} }
@@ -194,7 +198,7 @@
 <div class="page">
   <div class="header">
     <h1>CallCatch — Liquid Glass bubble</h1>
-    <small>EN UI · macOS 26+ glassEffect · Lucide icons · прототип v3</small>
+    <small>EN UI · Liquid Glass · Lucide icons · прототип v4 (+auto-stop)</small>
   </div>
   <p class="note">
     CSS-приближение: в приложении будет <b>нативный</b> Liquid Glass (рефракция, динамический тинт, системные блики).
@@ -204,6 +208,7 @@
 
   <div class="controls" id="controls">
     <button class="chip play" id="playBtn">▶ Полный флоу</button>
+    <button class="chip play" id="handsFreeBtn">▶ Hands-free (auto-stop)</button>
     <span class="spacer"></span>
     <button class="chip" id="themeBtn">☀️ Светлые обои</button>
   </div>
@@ -245,6 +250,12 @@ const tpl = {
   notice: (icon, text) => `${icon}<span>${text}</span>`,
   error: text => `${ICONS.warn('var(--yellow)')}<span>${text}</span>
      <button class="gbtn" onclick="hide()">Open Plaud</button>${xbtn}`,
+  /* Auto-stop: отсчёт + два выхода. ✕ прячет бабл, отсчёт продолжается. */
+  autoStop: left =>
+    `${ICONS.check('var(--green)')}<span>Call in Discord ended</span>
+     <span class="countdown">Stopping in ${left} s</span>
+     <button class="gbtn prominent" onclick="go('stopping')">Stop Now</button>
+     <button class="gbtn" onclick="keepRec()">Keep Recording</button>${xbtn}`,
 };
 
 /* the user-visible moments (EN strings from the design) */
@@ -254,6 +265,8 @@ const STATES = {
   startingPlaud: { html: () => tpl.progress('Starting Plaud…'), hiddenChip: true },
   recording:     { html: () => tpl.notice(ICONS.record('var(--red)'), 'Recording started') },
   callEnded:     { html: () => tpl.action(ICONS.check('var(--green)'), 'Call in Discord ended', 'Stop Recording', 'stopping') },
+  autoStop:      { html: () => tpl.autoStop(autoStopLeft), enter: () => enterAutoStop() },
+  keepRecording: { html: () => tpl.notice(ICONS.record('var(--red)'), 'Recording continues'), hiddenChip: true },
   stopping:      { html: () => tpl.progress('Stopping…'), hiddenChip: true },
   stopped:       { html: () => tpl.notice(ICONS.check('var(--green)'), 'Recording stopped'), hiddenChip: true },
   error:         { html: () => tpl.error('Recording didn’t start') },
@@ -266,8 +279,10 @@ const STATES = {
 
 const slot = document.getElementById('slot');
 let current = null, flowTimer = null;
+let autoStopLeft = 10, autoStopTimer = null;
 
 function render(name) {
+  if (name !== 'autoStop') clearAutoStop();
   current = name;
   const s = STATES[name];
   slot.innerHTML = (s.caption ? `<div class="caption">${s.caption}</div>` : '')
@@ -276,6 +291,7 @@ function render(name) {
     c.classList.toggle('active', c.dataset.state === name));
 }
 function hide() {
+  // ✕: бабл прячется, но авто-стоп-отсчёт НЕ отменяется (решение не принято).
   slot.innerHTML = ''; current = null;
   document.querySelectorAll('.chip[data-state]').forEach(c => c.classList.remove('active'));
 }
@@ -287,13 +303,44 @@ function go(name) {
   }, 1300);
 }
 function stopFlow() { if (flowTimer) { flowTimer.forEach(clearTimeout); flowTimer = null; } }
+
+/* --- auto-stop --- */
+function enterAutoStop() {
+  stopFlow(); clearAutoStop();
+  autoStopLeft = 10;
+  render('autoStop');
+  autoStopTimer = setInterval(() => {
+    autoStopLeft--;
+    if (autoStopLeft <= 0) { clearAutoStop(); go('stopping'); return; }
+    const el = document.querySelector('.countdown');
+    if (el) el.textContent = `Stopping in ${autoStopLeft} s`; // без пере-рендера: pop не дёргается
+    else if (current !== 'autoStop') clearAutoStop();
+  }, 1000);
+}
+function clearAutoStop() { if (autoStopTimer) { clearInterval(autoStopTimer); autoStopTimer = null; } }
+function keepRec() {
+  clearAutoStop(); stopFlow();
+  render('keepRecording');
+  setTimeout(() => current === 'keepRecording' && hide(), 1700);
+}
+
 function playFlow() {
-  stopFlow();
+  stopFlow(); clearAutoStop();
   const steps = [
     ['callDetected', 0], ['startingPlaud', 2200], ['starting', 3400], ['recording', 4600],
     ['callEnded', 7300], ['stopping', 9300], ['stopped', 10600], [null, 12400],
   ];
   flowTimer = steps.map(([s, t]) => setTimeout(() => s ? render(s) : hide(), t));
+}
+/* Hands-free: от детекта до авто-стопа — ни одного клика. */
+function playHandsFree() {
+  stopFlow(); clearAutoStop();
+  flowTimer = [
+    setTimeout(() => render('callDetected'), 0),
+    setTimeout(() => render('starting'), 2000),
+    setTimeout(() => render('recording'), 3200),
+    setTimeout(() => enterAutoStop(), 5700), // дальше отсчёт сам доведёт до stopped
+  ];
 }
 
 /* controls */
@@ -302,10 +349,11 @@ const themeBtn = document.getElementById('themeBtn');
 Object.keys(STATES).filter(n => !STATES[n].hiddenChip).forEach(n => {
   const b = document.createElement('button');
   b.className = 'chip'; b.dataset.state = n; b.textContent = n;
-  b.onclick = () => { stopFlow(); render(n); };
+  b.onclick = () => { stopFlow(); STATES[n].enter ? STATES[n].enter() : render(n); };
   controls.insertBefore(b, document.querySelector('.spacer'));
 });
 document.getElementById('playBtn').onclick = playFlow;
+document.getElementById('handsFreeBtn').onclick = playHandsFree;
 themeBtn.onclick = () => {
   const stage = document.getElementById('stage');
   const light = stage.classList.toggle('light');
@@ -318,6 +366,7 @@ document.getElementById('clock').textContent =
 /* gallery grouped by template */
 const GROUPS = [
   ['Action — иконка + текст + главная кнопка + ✕', ['callDetected', 'callEnded', 'alreadyRecording']],
+  ['Auto-stop (новое) — отсчёт + Stop Now / Keep Recording; ✕ прячет бабл, отсчёт идёт', ['autoStop', 'keepRecording']],
   ['Progress — спиннер + текст', ['startingPlaud', 'starting', 'stopping']],
   ['Notice — иконка + текст, сам исчезает', ['recording', 'stopped']],
   ['Error — предупреждение + Open Plaud + ✕', ['error', 'errorStop']],
