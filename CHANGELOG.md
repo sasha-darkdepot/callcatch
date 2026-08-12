@@ -9,6 +9,10 @@ them into a dated, tagged version (see "Versioning & releases" in the README).
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.3.0] — 2026-08-12
+
 ### Changed
 - Entire UI is now English (menu, bubble, attention messages).
 - Bubble redesigned as native Liquid Glass per the macOS 27 standard:
