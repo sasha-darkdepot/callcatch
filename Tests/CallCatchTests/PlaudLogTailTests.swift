@@ -105,4 +105,29 @@ final class PlaudLogTailTests: XCTestCase {
         write("startRecording by scene success recordingId=555\n")
         XCTAssertEqual(tail.poll(since: cp), .success(recordingId: "555"))
     }
+
+    // MARK: - scanForLine: инкрементальный курсор стоп-поллера
+
+    func testScanAdvancesPastMissAndFindsLater() {
+        let tail = makeTail()
+        let cp0 = tail.checkpoint()
+        write("noise line one\nnoise line two\n")
+        let (found1, cp1) = tail.scanForLine("stopRecording by scene", since: cp0)
+        XCTAssertFalse(found1)
+        XCTAssertGreaterThan(cp1.offset, cp0.offset) // шум потреблён, не перечитывается
+        write("stopRecording by scene\n")
+        let (found2, _) = tail.scanForLine("stopRecording by scene", since: cp1)
+        XCTAssertTrue(found2) // найдено с продвинутого курсора
+    }
+
+    func testScanKeepsUnfinishedLineForNextTick() {
+        let tail = makeTail()
+        let cp0 = tail.checkpoint()
+        write("noise\nstopRecording by ") // строка оборвана посреди записи
+        let (found1, cp1) = tail.scanForLine("stopRecording by scene", since: cp0)
+        XCTAssertFalse(found1)
+        write("scene\n") // хвост дописан следующим флашем Plaud
+        let (found2, _) = tail.scanForLine("stopRecording by scene", since: cp1)
+        XCTAssertTrue(found2) // курсор не съел недописанную строку
+    }
 }

@@ -4,7 +4,8 @@
 
 Menu-bar utility for macOS that catches the start of a call in **Discord,
 Signal, Telegram, or WhatsApp** and offers to record it with
-[Plaud](https://web.plaud.ai) — one click to start, one click to stop.
+[Plaud](https://web.plaud.ai) — hands-free with auto-record and auto-stop,
+or one click each way.
 
 It exists because Plaud's own auto-detection ignores these apps (its built-in
 list is limited to Zoom / Teams / Slack / Webex / Lark / browsers), so calls
@@ -26,8 +27,12 @@ in messengers go unrecorded unless you remember to start Plaud by hand.
 - **Stops recording** by clicking Plaud's floating recording widget through
   the Accessibility API — reliably, in any window position and whether the
   widget is collapsed or expanded.
-- **Menu bar controls**: manual record/stop, an auto-record toggle, launch at
-  login, and a "needs attention" state when setup is incomplete.
+- **Stops it for you**: an auto-started recording stops itself 10 s after the
+  call end — the bubble's red button drains as the countdown, and you can cut
+  it short, pause it by hovering, or keep recording with ✕.
+- **Menu bar controls**: manual record/stop, auto-record and auto-stop
+  toggles, "Find user_id Again", launch at login, and a "needs attention"
+  state when setup is incomplete.
 
 ## Requirements
 
@@ -49,26 +54,30 @@ Without `INSTALL=1` the app is built to `build/CallCatch.app` and not copied.
 
 1. **`user_id`** is picked up automatically from Plaud's logs. If the menu-bar
    icon shows ⚠️ "user_id not found", open [web.plaud.ai](https://web.plaud.ai)
-   with the desktop app running, press Record once, and relaunch CallCatch —
-   the id will be in the fresh log.
+   with the desktop app running, press Record once, then choose
+   **Find user_id Again** in the menu — the id is picked up from the fresh
+   log, no relaunch needed.
 2. **Accessibility**: the first time you use Record/Stop, macOS asks to grant
    CallCatch Accessibility access (System Settings → Privacy & Security →
-   Accessibility). This is required to stop recording. Detection and starting
-   work without it.
+   Accessibility). This is required to stop recordings — including Auto-stop:
+   without the grant CallCatch will bring Plaud forward and ask you to stop
+   by hand. Detection and starting work without it.
 
 ## Usage
 
 A call starts → the bubble appears → **Record in Plaud**. The call ends → the
-bubble offers **Stop recording**. Everything is also in the menu-bar menu:
+bubble offers **Stop Recording**. Everything is also in the menu-bar menu:
 
-- **Record now** — start manually during a call (e.g. if you dismissed the bubble).
-- **Stop recording** — always available while a CallCatch-started recording runs.
+- **Record Now** — start manually during a call (e.g. if you dismissed the bubble).
+- **Stop Recording** — available while a CallCatch-started recording runs
+  (except for the brief moment a stop attempt is already in flight).
+- **Find user_id Again** — re-scan Plaud's logs (shown only when the id is missing).
 - **Auto-record** — start recording automatically 7 s after a call begins.
 - **Auto-stop** — when a recording started automatically, stop it 10 s after
   CallCatch detects the call end. The red button in the bubble drains as a
   countdown: click it to stop now, hover to pause the countdown, ✕ to keep
   recording. On by default; only ever arms for auto-started recordings.
-- **Launch at login** — register as a login item.
+- **Launch at Login** — register as a login item.
 
 ## How it works
 
@@ -86,7 +95,7 @@ implementation plan: [`docs/superpowers/plans`](docs/superpowers/plans).
 
 `scripts/build-app.sh` signs with an Apple Development identity when one is in
 your keychain (override with `CODESIGN_IDENTITY`). A stable signature keeps the
-Accessibility and microphone grants across rebuilds, because macOS keys those
+Accessibility grant across rebuilds, because macOS keys those
 on the code signature rather than the binary hash. Without an identity the
 build falls back to ad-hoc signing and permissions must be re-granted after
 every rebuild.
@@ -98,11 +107,13 @@ every rebuild.
 - The stop click briefly moves the cursor to the widget (the only input
   Electron web content reliably accepts).
 - If an app releases the microphone on mute, a long mute can look like the
-  end of a call. With Auto-stop enabled (the default) this stops an
-  auto-started recording ~10 s later, and unmuting then starts a new one —
-  one meeting can end up split into two files with the muted stretch
-  missing. The countdown bubble is your window to intervene (hover pauses,
-  ✕ keeps recording); turn Auto-stop off if your apps mute this way.
+  end of a call. **With Auto-record and Auto-stop both on** (Auto-stop is on
+  by default, Auto-record is off) a long mute stops the recording ~10 s
+  later and unmuting starts a new one — one meeting can end up split into
+  two files with the muted stretch missing. Manually started recordings are
+  never auto-stopped. The countdown bubble is your window to intervene
+  (hover pauses, ✕ keeps recording); turn Auto-stop off if your apps mute
+  this way.
 - Verified against Plaud v1.3.7; a Plaud update may require re-checking the
   deep-link and stop behavior.
 
@@ -158,7 +169,7 @@ Sources/CallCatch/
   UserIdExtractor.swift  user_id from Plaud logs
   WatchedApps.swift     the four apps + bundle-id matching
   BubbleWindow / MenuBar / Settings / Log / main
-Tests/CallCatchTests/   80 unit tests (all logic behind protocols)
+Tests/CallCatchTests/   100 unit tests (all logic behind protocols)
 scripts/build-app.sh    build + sign + optional install
 ```
 

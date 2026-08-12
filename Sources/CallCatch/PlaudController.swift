@@ -24,7 +24,20 @@ final class PlaudController: PlaudControlling {
         guard let id = userId(),
               id.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil,
               let url = URL(string: "plaud://record?auto=1&user_id=\(id)") else { return }
-        NSWorkspace.shared.open(url)
+        openTargetedAtPlaud(url)
+    }
+
+    /// URL с user_id адресуем строго в Plaud, а не «кому LaunchServices отдаст
+    /// plaud://»: чужое приложение, перехватившее схему, получало бы наш id
+    /// каждые 5 секунд ретраев (ревью-финдинг). Fallback — обычный open.
+    private func openTargetedAtPlaud(_ url: URL) {
+        if let appURL = NSWorkspace.shared
+            .urlForApplication(withBundleIdentifier: PlaudAX.plaudBundleID) {
+            NSWorkspace.shared.open([url], withApplicationAt: appURL,
+                                    configuration: NSWorkspace.OpenConfiguration())
+        } else {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     func openPlaudWindow() {
@@ -51,10 +64,12 @@ final class PlaudController: PlaudControlling {
 
     func pollRecordingStopped() -> Bool {
         guard let cp = stopWatchCheckpoint else { return false }
-        if logTail.containsLine("stopRecording by scene", since: cp) {
+        let (found, next) = logTail.scanForLine("stopRecording by scene", since: cp)
+        if found {
             stopWatchCheckpoint = nil
             return true
         }
+        stopWatchCheckpoint = next // инкрементальный курсор — без перечитывания хвоста
         return false
     }
 

@@ -159,11 +159,20 @@ enum PlaudAX {
     private static func clickGlobal(x: CGFloat, y: CGFloat) {
         let pt = CGPoint(x: x, y: y)
         guard let src = CGEventSource(stateID: .hidSystemState) else { return }
-        CGEvent(mouseEventSource: src, mouseType: .mouseMoved, mouseCursorPosition: pt, mouseButton: .left)?.post(tap: .cghidEventTap)
+        // flags = []: hidSystemState наследует ФИЗИЧЕСКИ зажатые модификаторы, а
+        // авто-стоп кликает без человека — зажатый Ctrl превращал бы клик в
+        // right-click по виджету Plaud (ревью-финдинг).
+        let events = [
+            CGEvent(mouseEventSource: src, mouseType: .mouseMoved, mouseCursorPosition: pt, mouseButton: .left),
+            CGEvent(mouseEventSource: src, mouseType: .leftMouseDown, mouseCursorPosition: pt, mouseButton: .left),
+            CGEvent(mouseEventSource: src, mouseType: .leftMouseUp, mouseCursorPosition: pt, mouseButton: .left),
+        ]
+        events.forEach { $0?.flags = [] }
+        events[0]?.post(tap: .cghidEventTap)
         usleep(20_000)
-        CGEvent(mouseEventSource: src, mouseType: .leftMouseDown, mouseCursorPosition: pt, mouseButton: .left)?.post(tap: .cghidEventTap)
+        events[1]?.post(tap: .cghidEventTap)
         usleep(40_000)
-        CGEvent(mouseEventSource: src, mouseType: .leftMouseUp, mouseCursorPosition: pt, mouseButton: .left)?.post(tap: .cghidEventTap)
+        events[2]?.post(tap: .cghidEventTap)
     }
 
     /// Остановить запись: кликать кандидатов по вероятности, после каждого сверяясь

@@ -1,7 +1,14 @@
 # Auto-Stop — Design
 
 **Date:** 2026-08-12
-**Status:** Draft (pending review)
+**Status:** Implemented (v0.4.0 line); hardened by a six-expert review pass
+(5× Opus 5 + GPT-5.6-sol) — deltas vs this spec: ✕ is **sticky** for the
+lease (later calls don't re-arm), arming additionally requires no stop in
+flight and no armed countdown, the unattended retry re-runs all fire-time
+re-checks and skips when a call is live, the AX watch is bound to its
+recording, a late start success after call end is reconciled instead of
+orphaned, and the drain visual is driven by a 30 Hz `.common` Timer (not
+CA/TimelineView — both unreliable in a never-active app).
 **Prototype:** [`docs/prototypes/liquid-glass-bubble.html`](../../prototypes/liquid-glass-bubble.html) v4.2 — `autoStop` state, approved by user after two design iterations and a UX-pattern research pass.
 
 ## Goal

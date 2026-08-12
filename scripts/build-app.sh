@@ -32,6 +32,9 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 echo "Version: ${MARKETING_VERSION} (build ${BUILD_NUMBER})"
+# Каким тулчейном собрано — иначе два одинаковых по версии релиза (стоковый SDK
+# против beta через DEVELOPER_DIR) неразличимы постфактум (ревью-финдинг).
+echo "Toolchain: ${DEVELOPER_DIR:-$(xcode-select -p)} — $(swift --version 2>/dev/null | head -1)"
 # Подпись сертификатом Apple Development (стабильная identity: TCC-разрешения
 # — Accessibility и т.п. — сохраняются между пересборками, т.к. designated
 # requirement привязан к team ID + bundle id, а не к хэшу бинарника).
@@ -50,7 +53,12 @@ fi
 # подпись сохраняет TCC-разрешения, поэтому перевыдавать Accessibility не нужно).
 if [ "${INSTALL:-}" = "1" ]; then
     pkill -x CallCatch 2>/dev/null || true
+    # Копируем во временное имя и меняем местами: упавший cp не должен оставить
+    # пользователя вовсе без приложения и с login item в никуда (ревью-финдинг).
+    STAGED="/Applications/.Call Catch.app.new"
+    rm -rf "$STAGED"
+    cp -R "$APP" "$STAGED"
     rm -rf "/Applications/CallCatch.app" "/Applications/Call Catch.app"
-    cp -R "$APP" "/Applications/Call Catch.app"
+    mv "$STAGED" "/Applications/Call Catch.app"
     echo "Installed to /Applications/Call Catch.app"
 fi

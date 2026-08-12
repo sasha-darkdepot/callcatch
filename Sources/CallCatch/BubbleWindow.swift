@@ -82,7 +82,10 @@ final class BubbleWindow {
         stack.spacing = 8
 
         let container = NSGlassEffectContainerView()
-        container.spacing = 8
+        // spacing 0: батчинг рендера без «слипания» форм — spacing 8 при зазоре
+        // стека 8 включал merge пилла с капсулой (SDK: ноль «avoids distortion
+        // and merging effects for views in close proximity»; ревью-финдинг).
+        container.spacing = 0
         container.contentView = stack
 
         p.contentView = container
@@ -103,6 +106,14 @@ final class BubbleWindow {
             let x = screen.visibleFrame.midX - size.width / 2
             let y = screen.visibleFrame.minY + 80
             p.setFrameOrigin(NSPoint(x: x, y: y))
+        }
+        // Посев ховера: tracking area сообщает только ПЕРЕХОДЫ — если бабл
+        // появился прямо под курсором, mouseEntered не придёт, и «наведи, чтобы
+        // поставить на паузу» молча не сработает (ревью-финдинг). Сеем вручную
+        // строго ПОСЛЕ позиционирования (до него frame протухший). Вечную паузу
+        // от припаркованного курсора гасит 30-секундный детектор неподвижности.
+        if let model = drainModel, NSMouseInRect(NSEvent.mouseLocation, p.frame, false) {
+            handleHover(true, model: model)
         }
         if isNewAppearance {
             // Entrance только при появлении с нуля: fade + подъём на уровне
@@ -147,11 +158,24 @@ final class BubbleWindow {
         hoverRecheckTimer?.invalidate()
         hoverRecheckTimer = nil
         guard hovering else { return }
-        // Страховка от потерянного mouseExited: пока «на паузе», раз в секунду
-        // сверяем реальную позицию курсора — отсчёт не может зависнуть навсегда.
+        // Пока «на паузе», раз в секунду сверяем реальность:
+        // 1) курсор ушёл, а mouseExited потерялся → резюм;
+        // 2) курсор внутри, но НЕПОДВИЖЕН полминуты → человека нет (припарковал
+        //    и ушёл) — пауза не должна держать запись вечно (ревью-финдинг;
+        //    пауза существует для присутствующего человека, WCAG 2.2.1).
+        var lastLocation = NSEvent.mouseLocation
+        var stillTicks = 0
         let t = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
             guard let self, let p = self.panel else { return }
-            if !NSMouseInRect(NSEvent.mouseLocation, p.frame, false) {
+            let loc = NSEvent.mouseLocation
+            if !NSMouseInRect(loc, p.frame, false) {
+                self.handleHover(false, model: model)
+                return
+            }
+            let moved = abs(loc.x - lastLocation.x) > 0.5 || abs(loc.y - lastLocation.y) > 0.5
+            lastLocation = loc
+            stillTicks = moved ? 0 : stillTicks + 1
+            if stillTicks >= 30 {
                 self.handleHover(false, model: model)
             }
         }
@@ -162,6 +186,12 @@ final class BubbleWindow {
     private func resetHoverTracking() {
         hoverRecheckTimer?.invalidate()
         hoverRecheckTimer = nil
+        if hoverActive {
+            // Страховка: «каждый уход из callEndedAutoStop отменяет отсчёт» —
+            // межфайловый инвариант FSM; не оставляем его единственной защитой
+            // от зависшей паузы (autoStopHoverChanged безопасно-идемпотентен).
+            onAutoStopHover(false)
+        }
         hoverActive = false
         hoverRelay.onChange = nil
     }
@@ -174,7 +204,11 @@ final class BubbleWindow {
         p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         // .none: бабл не светится в захвате экрана (шеринг на созвонах).
         // В режиме --test-bubble наоборот нужен на скриншотах — для visual-проверок.
-        p.sharingType = CommandLine.arguments.contains("--test-bubble") ? .readOnly : .none
+        // Гейт двойной (env + аргумент), как у самого циклера: голый аргумент
+        // без CALLCATCH_DEBUG не должен снимать защиту (ревью-финдинг).
+        let visualDebug = ProcessInfo.processInfo.environment["CALLCATCH_DEBUG"] == "1"
+            && CommandLine.arguments.contains("--test-bubble")
+        p.sharingType = visualDebug ? .readOnly : .none
         p.isOpaque = false
         p.backgroundColor = .clear // обязательно: иначе окно закрасит фон поверх стекла
         p.hasShadow = false // стекло рисует глубину само — панельная тень дала бы дубль
@@ -234,10 +268,14 @@ final class DrainModel: ObservableObject {
 struct DrainingStopButton: View {
     @ObservedObject var model: DrainModel
     let action: () -> Void
-    /// Доля видимой заливки; ведётся CA-анимацией (linear до 0), а не
-    /// TimelineView: его расписание НЕ тикает в неактивном приложении, а
-    /// accessory-app неактивен всегда (заливка «появлялась только по ховеру»).
+    /// Доля видимой заливки. Ведётся 30-герцовым таймером в .common — НЕ
+    /// SwiftUI/CA-анимацией и НЕ TimelineView: в вечно-неактивном accessory-app
+    /// анимационные расписания либо не тикают, либо не гарантируют паузу
+    /// (два ревьюера независимо пометили анимационный путь как хрупкий, и
+    /// TimelineView уже один раз сломался вживую). Таймеры в .common в этом
+    /// приложении работают гарантированно — на них живёт весь FSM.
     @State private var shown: Double = 1
+    private let tick = Timer.publish(every: 1.0 / 30.0, on: .main, in: .common).autoconnect()
 
     var body: some View {
         Button(action: action) {
@@ -261,20 +299,7 @@ struct DrainingStopButton: View {
                 .overlay(Capsule().strokeBorder(.white.opacity(0.25), lineWidth: 0.5))
         }
         .buttonStyle(.plain)
-        .onAppear {
-            shown = model.progress()
-            withAnimation(.linear(duration: model.remainingTime())) { shown = 0 }
-        }
-        .onChange(of: model.paused) { _, paused in
-            if paused {
-                // Застыть на текущей доле: присвоение без анимации снимает
-                // летящую linear-анимацию и фиксирует заливку.
-                var t = Transaction(); t.disablesAnimations = true
-                withTransaction(t) { shown = model.progress() }
-            } else {
-                withAnimation(.linear(duration: model.remainingTime())) { shown = 0 }
-            }
-        }
+        .onReceive(tick) { _ in shown = model.progress() } // пауза бесплатна: progress() заморожен
     }
 }
 
