@@ -132,17 +132,24 @@
     to   { transform: translateY(0)    scale(1);   opacity:1; }
   }
   .bubble .icon { width:17px; height:17px; flex:none; display:block; }
-  /* Auto-stop: красная кнопка «тает» — сам индикатор отсчёта, без текста */
+  /* Auto-stop: красная кнопка «тает» — сам индикатор отсчёта, без текста.
+     Заливка — полная капсула в форме кнопки, срезаемая ПРЯМОЙ кромкой
+     (clip-path), а не scaleX: скругление не деформируется, левый кап
+     остаётся круглым, правый край — ровный срез. */
   .gbtn.prominent { position:relative; overflow:hidden; }
-  .gbtn.prominent.draining { background: rgba(224,42,42,.30); }
+  .gbtn.prominent.draining {
+    background: rgba(224,42,42,.30);
+    transition: background .18s ease;
+  }
+  .gbtn.prominent.draining:hover { background: rgba(224,42,42,.45); } /* цвет→цвет: анимируется, без скачка в полную заливку */
   .gbtn.prominent.draining .fill {
     position:absolute; inset:0; border-radius:inherit;
     background: linear-gradient(180deg, rgba(255,90,80,.95), rgba(224,42,42,.95));
-    transform-origin:left center;
+    clip-path: inset(0 0 0 0);
     animation: drain 10s linear forwards;
   }
   .gbtn.prominent.draining .lbl { position:relative; }
-  @keyframes drain { to { transform: scaleX(0); } }
+  @keyframes drain { to { clip-path: inset(0 100% 0 0); } }
   /* pause-on-hover: пока курсор над баблом, отсчёт замирает (WCAG 2.2.1 / Discord-паттерн).
      Класс вешает JS по mouseenter — один источник правды для CSS-заливки и таймера. */
   .bubble.paused .gbtn.prominent.draining .fill { animation-play-state: paused; }
@@ -169,7 +176,7 @@
     background: linear-gradient(180deg, rgba(255,90,80,.95), rgba(224,42,42,.95));
     box-shadow: inset 0 1px 0 rgba(255,255,255,.4), 0 3px 10px rgba(224,42,42,.4);
   }
-  .gbtn.prominent:hover:not(:disabled) { background: linear-gradient(180deg, rgba(255,105,95,1), rgba(235,55,55,1)); }
+  .gbtn.prominent:not(.draining):hover:not(:disabled) { background: linear-gradient(180deg, rgba(255,105,95,1), rgba(235,55,55,1)); }
   .xbtn {
     width:26px; height:26px; padding:0; border-radius:50%;
     display:flex; align-items:center; justify-content:center;

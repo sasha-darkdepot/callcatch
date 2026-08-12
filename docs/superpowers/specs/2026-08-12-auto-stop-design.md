@@ -95,14 +95,22 @@ pause the countdown just by hovering.
 ## UI (`BubbleWindow.swift` + `MenuBar.swift`)
 
 - `callEndedAutoStop` renders the Action template with the draining
-  primary button: red fill (a `Capsule` overlay) shrinks `scaleX` 1→0,
-  linear, over the remaining time; label "Stop Recording" unchanged; ✕
-  present. Same paddings/fonts as `callEndedOfferStop` — **no width or
-  typography change** (session-settled). Note: SwiftUI can't suspend a
-  running animation mid-flight — the view keeps its own progress
-  bookkeeping (store the fraction on pause, restart a linear animation
-  over the remainder on resume). Cosmetic only; the FSM timer is
-  authoritative.
+  primary button. **Drain geometry (session-settled: user-directed):** the
+  red fill is a full `Capsule` matching the button shape, revealed through
+  a **leading-aligned straight-edged mask** whose width animates 100%→0
+  linearly over the remaining time (`.mask(alignment: .leading) {
+  Rectangle().frame(width: progress * fullWidth) }`). Scaling the capsule
+  itself is forbidden — the corner radius deforms mid-animation. Left cap
+  stays round; the receding right edge is a straight cut. Label "Stop
+  Recording" unchanged; ✕ present. Same paddings/fonts as
+  `callEndedOfferStop` — **no width or typography change**
+  (session-settled). **Hover state (session-settled: user-directed):** the
+  hover highlight only nudges the translucent base color (animated,
+  ~0.15 s, color→color) — it must never repaint the button as fully
+  filled. Note: SwiftUI can't suspend a running animation mid-flight — the
+  view keeps its own progress bookkeeping (store the fraction on pause,
+  restart a linear animation over the remainder on resume). Cosmetic only;
+  the FSM timer is authoritative.
 - Hover trigger: **AppKit `NSTrackingArea` with `.activeAlways`** on the
   panel's content view (committed — SwiftUI `onHover` tracking can be
   activation-dependent, and this panel is non-activating in an
