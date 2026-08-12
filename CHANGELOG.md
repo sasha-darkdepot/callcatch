@@ -11,10 +11,14 @@ them into a dated, tagged version (see "Versioning & releases" in the README).
 
 ### Changed
 - Entire UI is now English (menu, bubble, attention messages).
-- Bubble redesigned as native Liquid Glass (macOS 26 `glassEffect`): capsule
-  with 4 content templates, Lucide icons, glass buttons, entrance animation;
-  disabled-reason moved to a caption pill above the capsule; "Starting Plaud…"
-  kept as the cold-start cue.
+- Bubble redesigned as native Liquid Glass per the macOS 27 standard:
+  AppKit `NSGlassEffectView` capsule (`.regular`, respects the system
+  transparency slider, interactive bounce on macOS 27) — SwiftUI's
+  `glassEffect` degrades in unfocused apps and an accessory app is unfocused
+  always. 4 content templates, Lucide icons (vendored as path code), solid
+  buttons (no glass-on-glass), panel-level entrance animation; disabled-reason
+  moved to a caption pill above the capsule; "Starting Plaud…" kept as the
+  cold-start cue.
 - Menu attention item uses an SF Symbol image instead of the "⚠️" prefix.
 - `--test-bubble` (debug) now cycles every visible bubble state, bypassing the
   FSM, and makes the bubble visible to screen capture for visual checks.
