@@ -17,8 +17,8 @@ func makeScheduler() -> (TimeInterval, @escaping () -> Void) -> Cancellable {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate {
-    static let userIdMissingMessage = "user_id не найден: открой web.plaud.ai, нажми Record, затем «Найти user_id заново»"
-    static let axMissingMessage = "Выдай доступ Accessibility в System Settings — нужен для остановки записи"
+    static let userIdMissingMessage = "user_id not found: open web.plaud.ai, press Record, then \"Find user_id Again\""
+    static let axMissingMessage = "Grant Accessibility access in System Settings — needed to stop recordings"
 
     var settings: Settings!
     var appState: AppState!
