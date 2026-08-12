@@ -165,12 +165,20 @@ struct BubbleView: View {
                            button: String, disabled: Bool, action: @escaping () -> Void) -> some View {
         LucideIcon(icon, tint: tint)
         bubbleText(text)
-        Button(button, action: action)
-            .font(.system(size: 13, weight: .medium)) // дефолт стеклянных кнопок — semibold
-            .buttonStyle(.glassProminent)
-            .buttonBorderShape(.capsule)
-            .tint(.red)
-            .disabled(disabled)
+        // Кнопки рисуем сами (plain + свой glass-фон): системные стеклянные
+        // стили глушатся в неактивном приложении, а accessory-app неактивен
+        // почти всегда — красная кнопка выглядела вечно выключенной.
+        Button(action: action) {
+            Text(button)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 6)
+                .glassEffect(.clear.tint(.red.opacity(0.85)).interactive(), in: .capsule)
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .opacity(disabled ? 0.5 : 1)
         dismissButton
     }
 
@@ -188,10 +196,14 @@ struct BubbleView: View {
     @ViewBuilder private func errorRow(_ text: String) -> some View {
         LucideIcon(.triangleAlert, tint: .yellow)
         bubbleText(text)
-        Button("Open Plaud", action: onOpenPlaud)
-            .font(.system(size: 13, weight: .medium))
-            .buttonStyle(.glass)
-            .buttonBorderShape(.capsule)
+        Button(action: onOpenPlaud) {
+            Text("Open Plaud")
+                .font(.system(size: 13, weight: .medium))
+                .padding(.horizontal, 14)
+                .padding(.vertical, 6)
+                .glassEffect(.clear.interactive(), in: .capsule)
+        }
+        .buttonStyle(.plain)
         dismissButton
     }
 
@@ -200,8 +212,11 @@ struct BubbleView: View {
     }
 
     private var dismissButton: some View {
-        Button(action: onDismiss) { LucideIcon(.x, tint: .primary, size: 11) }
-            .buttonStyle(.glass)
-            .buttonBorderShape(.circle)
+        Button(action: onDismiss) {
+            LucideIcon(.x, tint: .primary, size: 11)
+                .padding(8)
+                .glassEffect(.clear.interactive(), in: .circle)
+        }
+        .buttonStyle(.plain)
     }
 }
