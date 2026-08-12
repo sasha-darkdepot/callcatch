@@ -2,7 +2,14 @@ import Foundation
 import ServiceManagement
 
 final class Settings {
-    private let defaults = UserDefaults.standard
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        // Registered default: авто-стоп включён из коробки (plain bool(forKey:)
+        // дефолтится в false); значение, выставленное пользователем, всегда выше.
+        defaults.register(defaults: ["autoStop": true])
+    }
 
     static let plaudLogsDir = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Application Support/Plaud/logs")
@@ -15,6 +22,11 @@ final class Settings {
     var autoRecord: Bool {
         get { defaults.bool(forKey: "autoRecord") }
         set { defaults.set(newValue, forKey: "autoRecord") }
+    }
+
+    var autoStop: Bool {
+        get { defaults.bool(forKey: "autoStop") }
+        set { defaults.set(newValue, forKey: "autoStop") }
     }
 
     /// Заполнить userId из логов Plaud, если ещё не известен. true — id есть.
