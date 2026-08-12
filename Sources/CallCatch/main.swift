@@ -43,6 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate {
                             autoRecord: { [weak self] in self?.settings.autoRecord ?? false },
                             userIdAvailable: { [weak self] in self?.settings.userId != nil },
                             micCurrentlyActive: { tracker.isMicActive($0) },
+                            autoStopEnabled: { [weak self] in self?.settings.autoStop ?? false },
                             scheduler: schedule)
         appState.delegate = self
 
@@ -56,7 +57,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate {
                 self?.appState.stopTapped()
             },
             onOpenPlaud: { [weak self] in self?.plaudController.openPlaudWindow() },
-            onDismiss: { [weak self] in self?.appState.dismissTapped() }
+            onDismiss: { [weak self] in self?.appState.dismissTapped() },
+            onAutoStopHover: { [weak self] in self?.appState.autoStopHoverChanged(hovering: $0) }
         )
         menuBar = MenuBar(
             settings: settings,
@@ -68,7 +70,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate {
             onFindUserId: { [weak self] in
                 self?.settings.rescanUserId()
                 self?.appState.refreshMenu()
-            }
+            },
+            onAutoStopToggled: { [weak self] in self?.appState.autoStopToggled() }
         )
 
         tracker.delegate = appState
@@ -107,24 +110,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate {
                 // Дебаг-циклер: гоняет бабл по всем видимым состояниям напрямую,
                 // мимо FSM — единственный способ увидеть Error-шаблоны и caption
                 // без реальных сбоев Plaud. Только под CALLCATCH_DEBUG=1.
-                let states: [BubbleState] = [
-                    .callDetected(app: .discord, recordDisabledReason: nil),
-                    .callDetected(app: .discord, recordDisabledReason: "Plaud is already recording"),
-                    .starting(app: .discord, launchingPlaud: true),
-                    .starting(app: .discord, launchingPlaud: false),
-                    .recordingStarted,
-                    .callEndedOfferStop(app: .discord),
-                    .stopping,
-                    .stopped,
-                    .startFailed,
-                    .stopFailed,
-                    .hidden,
+                // (state, dwell): у callEndedAutoStop длинный dwell — полюбоваться
+                // полным 10-секундным drain. Циклер визуальный, FSM он обходит.
+                let states: [(BubbleState, TimeInterval)] = [
+                    (.callDetected(app: .discord, recordDisabledReason: nil), 3),
+                    (.callDetected(app: .discord, recordDisabledReason: "Plaud is already recording"), 3),
+                    (.starting(app: .discord, launchingPlaud: true), 3),
+                    (.starting(app: .discord, launchingPlaud: false), 3),
+                    (.recordingStarted, 3),
+                    (.callEndedOfferStop(app: .discord), 3),
+                    (.callEndedAutoStop(app: .discord), 15),
+                    (.recordingContinues, 3),
+                    (.stopping, 3),
+                    (.stopped, 3),
+                    (.startFailed, 3),
+                    (.stopFailed, 3),
+                    (.hidden, 0),
                 ]
-                for (i, state) in states.enumerated() {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1 + Double(i) * 3) { [weak self] in
+                var at: TimeInterval = 1
+                for (state, dwell) in states {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + at) { [weak self] in
                         Log.info("test-bubble: \(state)")
                         self?.bubble.show(state: state)
                     }
+                    at += dwell
                 }
             }
         }

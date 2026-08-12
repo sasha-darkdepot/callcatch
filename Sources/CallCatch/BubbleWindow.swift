@@ -16,18 +16,25 @@ final class BubbleWindow {
     private let onStop: () -> Void
     private let onOpenPlaud: () -> Void
     private let onDismiss: () -> Void
+    private let onAutoStopHover: (Bool) -> Void
+    private let hoverRelay = HoverRelay()
+    private var hoverRecheckTimer: Timer?
+    private var hoverActive = false
 
     init(onRecord: @escaping () -> Void,
          onStop: @escaping () -> Void,
          onOpenPlaud: @escaping () -> Void,
-         onDismiss: @escaping () -> Void) {
+         onDismiss: @escaping () -> Void,
+         onAutoStopHover: @escaping (Bool) -> Void = { _ in }) {
         self.onRecord = onRecord
         self.onStop = onStop
         self.onOpenPlaud = onOpenPlaud
         self.onDismiss = onDismiss
+        self.onAutoStopHover = onAutoStopHover
     }
 
     func show(state: BubbleState) {
+        resetHoverTracking()
         if state == .hidden {
             panel?.orderOut(nil)
             return
@@ -35,8 +42,14 @@ final class BubbleWindow {
         let isNewAppearance = !(panel?.isVisible ?? false)
         let p = panel ?? makePanel()
 
+        // Драйвер тающей кнопки: живёт один показ callEndedAutoStop.
+        var drainModel: DrainModel?
+        if case .callEndedAutoStop = state {
+            drainModel = DrainModel(total: AppState.autoStopWindow)
+        }
+
         let row = NSHostingView(rootView: BubbleView(
-            state: state, onRecord: onRecord, onStop: onStop,
+            state: state, autoStopModel: drainModel, onRecord: onRecord, onStop: onStop,
             onOpenPlaud: onOpenPlaud, onDismiss: onDismiss))
         let capsule = NSGlassEffectView()
         // .regular — по HIG: clear только над media-rich контентом и с dimming-слоем;
@@ -73,6 +86,9 @@ final class BubbleWindow {
         container.contentView = stack
 
         p.contentView = container
+        if let model = drainModel {
+            installHoverTracking(on: container, model: model)
+        }
         container.layoutSubtreeIfNeeded() // fittingSize до первого layout может быть нулевым
         var size = container.fittingSize
         if size.width < 10 || size.height < 10 {
@@ -109,6 +125,47 @@ final class BubbleWindow {
         panel = p
     }
 
+    // MARK: - Ховер авто-стопа
+
+    /// Один триггер управляет и косметикой (DrainModel), и FSM-таймером — урок
+    /// прототипа v4.2: два независимых механизма паузы рассинхронизируются.
+    private func installHoverTracking(on view: NSView, model: DrainModel) {
+        view.addTrackingArea(NSTrackingArea(
+            rect: .zero,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: hoverRelay, userInfo: nil))
+        hoverRelay.onChange = { [weak self] hovering in
+            self?.handleHover(hovering, model: model)
+        }
+    }
+
+    private func handleHover(_ hovering: Bool, model: DrainModel) {
+        guard hovering != hoverActive else { return }
+        hoverActive = hovering
+        if hovering { model.pause() } else { model.resume() }
+        onAutoStopHover(hovering)
+        hoverRecheckTimer?.invalidate()
+        hoverRecheckTimer = nil
+        guard hovering else { return }
+        // Страховка от потерянного mouseExited: пока «на паузе», раз в секунду
+        // сверяем реальную позицию курсора — отсчёт не может зависнуть навсегда.
+        let t = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
+            guard let self, let p = self.panel else { return }
+            if !NSMouseInRect(NSEvent.mouseLocation, p.frame, false) {
+                self.handleHover(false, model: model)
+            }
+        }
+        RunLoop.main.add(t, forMode: .common) // .default замирает при открытом NSMenu
+        hoverRecheckTimer = t
+    }
+
+    private func resetHoverTracking() {
+        hoverRecheckTimer?.invalidate()
+        hoverRecheckTimer = nil
+        hoverActive = false
+        hoverRelay.onChange = nil
+    }
+
     private func makePanel() -> NSPanel {
         let p = NSPanel(contentRect: .zero,
                         styleMask: [.nonactivatingPanel, .borderless, .fullSizeContentView],
@@ -124,6 +181,81 @@ final class BubbleWindow {
         p.hidesOnDeactivate = false
         p.isReleasedWhenClosed = false
         return p
+    }
+}
+
+/// Приёмник событий NSTrackingArea (BubbleWindow — не NSResponder).
+private final class HoverRelay: NSResponder {
+    var onChange: ((Bool) -> Void)?
+    override func mouseEntered(with event: NSEvent) { onChange?(true) }
+    override func mouseExited(with event: NSEvent) { onChange?(false) }
+}
+
+/// Драйвер «тающей» заливки кнопки авто-стопа. Косметика: авторитетный таймер
+/// живёт в FSM; пауза/резюм обоих идёт от одного ховер-триггера.
+final class DrainModel: ObservableObject {
+    let total: TimeInterval
+    private var remaining: TimeInterval
+    private var startedAt: CFTimeInterval
+    @Published private(set) var paused = false
+
+    init(total: TimeInterval) {
+        self.total = total
+        self.remaining = total
+        self.startedAt = CACurrentMediaTime()
+    }
+
+    func pause() {
+        guard !paused else { return }
+        remaining = max(0, remaining - (CACurrentMediaTime() - startedAt))
+        paused = true
+    }
+
+    func resume() {
+        guard paused else { return }
+        startedAt = CACurrentMediaTime()
+        paused = false
+    }
+
+    /// Доля оставшейся заливки [0…1] на данный момент.
+    func progress() -> Double {
+        let left = paused ? remaining : max(0, remaining - (CACurrentMediaTime() - startedAt))
+        return max(0, min(1, left / total))
+    }
+}
+
+/// Тающая красная кнопка: полная капсула в форме кнопки, срезаемая ПРЯМОЙ
+/// кромкой через mask (scaleX деформировал бы скругление). База слегка
+/// подсвечивается на паузе-ховере — цвет→цвет, плавно, без полной заливки.
+struct DrainingStopButton: View {
+    @ObservedObject var model: DrainModel
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: model.paused)) { _ in
+                Text("Stop Recording")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 6)
+                    .background(
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(Color.red.opacity(model.paused ? 0.45 : 0.3))
+                            GeometryReader { geo in
+                                Capsule().fill(Color.red.opacity(0.9))
+                                    .mask(alignment: .leading) {
+                                        Rectangle()
+                                            .frame(width: geo.size.width * model.progress())
+                                    }
+                            }
+                        }
+                    )
+                    .overlay(Capsule().strokeBorder(.white.opacity(0.25), lineWidth: 0.5))
+            }
+        }
+        .buttonStyle(.plain)
+        .animation(.easeInOut(duration: 0.15), value: model.paused)
     }
 }
 
@@ -148,6 +280,7 @@ struct BubbleCaptionView: View {
 /// неактивном приложении).
 struct BubbleView: View {
     let state: BubbleState
+    var autoStopModel: DrainModel? = nil
     let onRecord: () -> Void
     let onStop: () -> Void
     let onOpenPlaud: () -> Void
@@ -168,7 +301,7 @@ struct BubbleView: View {
     /// у рядов с круглой кнопкой ✕ на конце отступ меньше — баланс за счёт кнопки.
     private var trailingPadding: CGFloat {
         switch state {
-        case .starting, .stopping, .recordingStarted, .stopped: 18
+        case .starting, .stopping, .recordingStarted, .stopped, .recordingContinues: 18
         default: 12
         }
     }
@@ -189,6 +322,15 @@ struct BubbleView: View {
         case let .callEndedOfferStop(app):
             actionRow(icon: .circleCheck, tint: .green, text: "Call in \(app.displayName) ended",
                       button: "Stop Recording", disabled: false, action: onStop)
+        case let .callEndedAutoStop(app):
+            LucideIcon(.circleCheck, tint: .green)
+            bubbleText("Call in \(app.displayName) ended")
+            if let model = autoStopModel {
+                DrainingStopButton(model: model, action: onStop)
+            }
+            dismissButton
+        case .recordingContinues:
+            noticeRow(icon: .disc, tint: .red, text: "Recording continues", pulse: true)
         case .stopping:
             progressRow("Stopping…")
         case .stopped:

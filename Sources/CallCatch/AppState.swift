@@ -7,6 +7,8 @@ enum BubbleState: Equatable {
     case recordingStarted
     case startFailed
     case callEndedOfferStop(app: WatchedApp)
+    case callEndedAutoStop(app: WatchedApp) // тающая кнопка: авто-стоп через 10 с
+    case recordingContinues // ✕ на отсчёте: запись оставлена, короткий notice
     case stopping
     case stopped
     case stopFailed // автостоп не удался — предложить открыть Plaud и остановить вручную
@@ -40,9 +42,19 @@ protocol AppStateDelegate: AnyObject {
 final class AppState: CallEventDelegate {
     private enum Lease: Equatable {
         case idle
-        case pending(owner: WatchedApp, generation: Int)
-        case confirmed(owner: WatchedApp, recordingId: String)
+        case pending(owner: WatchedApp, generation: Int, automatic: Bool)
+        case confirmed(owner: WatchedApp, recordingId: String, automatic: Bool)
     }
+
+    /// Отсчёт авто-стопа — ЕДИНОЕ опциональное значение: любая отмена зануляет
+    /// целиком (включая остаток, замороженный ховером), иначе унховер после
+    /// отмены оживил бы мёртвый отсчёт и обрезал новый звонок.
+    private struct AutoStopCountdown {
+        var timer: Cancellable? // nil = на паузе (ховер)
+        var armedAt: TimeInterval
+        var remaining: TimeInterval
+    }
+    static let autoStopWindow: TimeInterval = 10
 
     private let plaud: PlaudControlling
     private let autoRecord: () -> Bool
@@ -58,6 +70,9 @@ final class AppState: CallEventDelegate {
     private var lease: Lease = .idle
     private var generation = 0
     private var stopInFlight = false
+    private var autoStopCountdown: AutoStopCountdown?
+    private var unattendedStopRetried = false
+    private var stopRetryTimer: Cancellable?
     private var retryTimer: Cancellable?
     private var startDeadlineTimer: Cancellable?
     private var autoTimers: [WatchedApp: Cancellable] = [:]
@@ -66,15 +81,24 @@ final class AppState: CallEventDelegate {
         didSet { if bubble != oldValue { delegate?.bubbleChanged(bubble) } }
     }
 
+    private let autoStopEnabled: () -> Bool
+    /// Монотонные часы: scheduler не умеет отвечать «сколько прошло», а
+    /// ховер-пауза требует точного остатка. В тестах — MockClock.
+    private let now: () -> TimeInterval
+
     init(plaud: PlaudControlling,
          autoRecord: @escaping () -> Bool,
          userIdAvailable: @escaping () -> Bool = { true },
          micCurrentlyActive: @escaping (WatchedApp) -> Bool = { _ in true },
+         autoStopEnabled: @escaping () -> Bool = { false },
+         now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
          scheduler: @escaping (TimeInterval, @escaping () -> Void) -> Cancellable) {
         self.plaud = plaud
         self.autoRecord = autoRecord
         self.userIdAvailable = userIdAvailable
         self.micCurrentlyActive = micCurrentlyActive
+        self.autoStopEnabled = autoStopEnabled
+        self.now = now
         self.scheduler = scheduler
     }
 
@@ -84,7 +108,7 @@ final class AppState: CallEventDelegate {
         autoTimers[app] = scheduler(7.0) { [weak self] in
             guard let self, self.activeCalls.contains(app), self.lease == .idle,
                   self.micCurrentlyActive(app) else { return }
-            self.beginStart(owner: app)
+            self.beginStart(owner: app, automatic: true)
         }
     }
 
@@ -92,6 +116,9 @@ final class AppState: CallEventDelegate {
 
     func callStarted(app: WatchedApp) {
         Log.debug("AppState: callStarted(\(app.rawValue)) lease=\(lease)")
+        // Новый звонок гасит отсчёт авто-стопа: стоп сейчас обрезал бы его.
+        // Перевзведёмся, когда последний звонок закончится (last-call-out).
+        cancelAutoStop()
         activeCalls.append(app)
         bubble = .callDetected(app: app, recordDisabledReason: recordDisabledReason())
         scheduleAutoRecord(app)
@@ -103,7 +130,7 @@ final class AppState: CallEventDelegate {
         activeCalls.removeAll { $0 == app }
         autoTimers.removeValue(forKey: app)?.cancel()
         switch lease {
-        case .pending(let owner, _) where owner == app:
+        case .pending(let owner, _, _) where owner == app:
             // Короткий звонок: отменить ретраи; поздний результат игнорируется (aborted).
             // Известное принятое ограничение: если Plaud всё же обработает уже
             // отправленный deep link ПОСЛЕ checkpoint следующей попытки, её lease
@@ -111,9 +138,18 @@ final class AppState: CallEventDelegate {
             // к текущему активному звонку, что практически совпадает с намерением.
             abortStart()
             bubble = .hidden
-        case .confirmed(let owner, _) where owner == app:
-            bubble = .callEndedOfferStop(app: app)
-            scheduleBubbleAutoHide(60)
+        case .confirmed(let owner, _, let automatic):
+            // Взвод авто-стопа — инвариант «последний звонок вышел»: владелец
+            // lease НЕ важен (кросс-апп перекрытия ломали владельческий вариант
+            // в обе стороны — ревью-финдинг двух независимых ревьюеров).
+            if activeCalls.isEmpty, automatic, autoStopEnabled() {
+                armAutoStop(owner: owner)
+            } else if owner == app {
+                bubble = .callEndedOfferStop(app: app)
+                scheduleBubbleAutoHide(60)
+            } else if case .callDetected(let a, _) = bubble, a == app {
+                bubble = .hidden
+            }
         default:
             if case .callDetected(let a, _) = bubble, a == app { bubble = .hidden }
         }
@@ -124,11 +160,16 @@ final class AppState: CallEventDelegate {
 
     func recordTapped() {
         guard lease == .idle, userIdAvailable(), let app = activeCalls.last else { return }
-        beginStart(owner: app)
+        beginStart(owner: app, automatic: false)
     }
 
     func stopTapped() {
-        guard case .confirmed(_, let rid) = lease, !stopInFlight else { return }
+        cancelAutoStop()
+        initiateStop(attended: true)
+    }
+
+    private func initiateStop(attended: Bool) {
+        guard case .confirmed(_, let rid, _) = lease, !stopInFlight else { return }
         stopInFlight = true
         bubble = .stopping
         pushMenu() // canStopNow гаснет сразу — повторный клик невозможен
@@ -137,7 +178,7 @@ final class AppState: CallEventDelegate {
             self.stopInFlight = false
             // Привязка к конкретной записи: если lease уже не та (стоп сработал
             // иначе / началась новая запись) — устаревший результат не применяем.
-            guard case .confirmed(_, let current) = self.lease, current == rid else {
+            guard case .confirmed(_, let current, _) = self.lease, current == rid else {
                 self.pushMenu()
                 return
             }
@@ -145,6 +186,13 @@ final class AppState: CallEventDelegate {
                 self.releaseLease()
                 self.bubble = .stopped
                 self.scheduleBubbleAutoHide(2)
+            } else if !attended, !self.unattendedStopRetried {
+                // Hands-free стоп: один тихий ретрай прежде чем звать человека,
+                // которого в этом сценарии может не быть за столом.
+                self.unattendedStopRetried = true
+                self.stopRetryTimer = self.scheduler(5.0) { [weak self] in
+                    self?.initiateStop(attended: false)
+                }
             } else {
                 // Fallback: поднять окно Plaud и явно сказать пользователю остановить
                 // вручную (не прятать бабл молча). Флаг снимет AX-поллинг после стопа.
@@ -157,6 +205,71 @@ final class AppState: CallEventDelegate {
         }
     }
 
+    // MARK: - Авто-стоп
+
+    private func armAutoStop(owner: WatchedApp) {
+        cancelAutoStop()
+        bubbleHideTimer?.cancel() // отсчёт сам управляет судьбой бабла
+        bubble = .callEndedAutoStop(app: owner)
+        autoStopCountdown = AutoStopCountdown(
+            timer: scheduler(Self.autoStopWindow) { [weak self] in self?.autoStopFired() },
+            armedAt: now(),
+            remaining: Self.autoStopWindow)
+    }
+
+    private func cancelAutoStop() {
+        autoStopCountdown?.timer?.cancel()
+        autoStopCountdown = nil
+        stopRetryTimer?.cancel()
+        stopRetryTimer = nil
+    }
+
+    /// Ховер над баблом: пауза/резюм отсчёта. Идемпотентно для повторов.
+    func autoStopHoverChanged(hovering: Bool) {
+        guard var c = autoStopCountdown else { return }
+        if hovering {
+            guard let t = c.timer else { return } // уже на паузе
+            t.cancel()
+            c.remaining = max(0, c.remaining - (now() - c.armedAt))
+            c.timer = nil
+            autoStopCountdown = c
+        } else {
+            guard c.timer == nil else { return } // и не были на паузе
+            c.armedAt = now()
+            c.timer = scheduler(c.remaining) { [weak self] in self?.autoStopFired() }
+            autoStopCountdown = c
+        }
+    }
+
+    /// Меню дёрнуло тумблер Auto-stop: выключение при живом отсчёте отменяет
+    /// его и возвращает обычное предложение стопа (ревью-финдинг, cross-model).
+    func autoStopToggled() {
+        guard autoStopCountdown != nil, !autoStopEnabled() else { return }
+        cancelAutoStop()
+        if case .callEndedAutoStop(let app) = bubble {
+            bubble = .callEndedOfferStop(app: app)
+            scheduleBubbleAutoHide(60)
+        }
+    }
+
+    private func autoStopFired() {
+        autoStopCountdown = nil
+        // Мир мог уехать за 10 секунд — перепроверяем всё, что взводило таймер.
+        guard case .confirmed(_, _, true) = lease, autoStopEnabled() else { return }
+        if plaud.pollRecordingStopped() || !plaud.isPlaudRunning() {
+            // Уже остановлено в самом Plaud в последнюю секунду — не кликаем
+            // в мёртвый виджет (это подняло бы окно Plaud через stopFailed).
+            Log.info("AppState: auto-stop skipped — recording already ended externally")
+            bubble = .hidden
+            releaseLease()
+            pushMenu()
+            return
+        }
+        Log.info("AppState: auto-stop firing")
+        unattendedStopRetried = false
+        initiateStop(attended: false)
+    }
+
     /// Внешний триггер перерисовать меню (например, после «Найти user_id заново»).
     func refreshMenu() { pushMenu() }
 
@@ -166,16 +279,25 @@ final class AppState: CallEventDelegate {
         if case .callDetected(let app, _) = bubble {
             autoTimers.removeValue(forKey: app)?.cancel()
         }
+        // ✕ на отсчёте авто-стопа = «оставить запись»: отсчёт умирает, lease
+        // живёт (стоп — через меню или сам Plaud). Короткий notice-подтверждение;
+        // его снятие snapshot-guarded — чужой более новый бабл не тронет.
+        if case .callEndedAutoStop = bubble {
+            cancelAutoStop()
+            bubble = .recordingContinues
+            scheduleBubbleAutoHide(1.7)
+            return
+        }
         bubble = .hidden
     }
 
     // MARK: - Старт записи
 
-    private func beginStart(owner: WatchedApp) {
+    private func beginStart(owner: WatchedApp, automatic: Bool) {
         generation += 1
         plaud.makeCheckpoint()
         plaud.sendStartDeepLink()
-        lease = .pending(owner: owner, generation: generation)
+        lease = .pending(owner: owner, generation: generation, automatic: automatic)
         bubble = .starting(app: owner, launchingPlaud: !plaud.isPlaudRunning())
         Log.debug("AppState: beginStart(\(owner.rawValue)) gen=\(generation)")
         scheduleRetry()
@@ -193,17 +315,18 @@ final class AppState: CallEventDelegate {
             if plaud.pollRecordingStopped() || !plaud.isPlaudRunning() {
                 Log.info("AppState: recording ended externally (stop or Plaud gone), releasing lease")
                 if case .callEndedOfferStop = bubble { bubble = .hidden }
+                if case .callEndedAutoStop = bubble { bubble = .hidden } // тающий бабл без записи — мусор
                 releaseLease()
                 pushMenu()
                 return
             }
         }
-        guard case .pending(let owner, _) = lease else { return }
+        guard case .pending(let owner, _, let automatic) = lease else { return }
         switch plaud.pollStartOutcome() {
         case .success(let rid):
             Log.info("AppState: start confirmed recordingId=\(rid)")
             finishStartTimers()
-            lease = .confirmed(owner: owner, recordingId: rid)
+            lease = .confirmed(owner: owner, recordingId: rid, automatic: automatic)
             bubble = .recordingStarted
             scheduleBubbleAutoHide(2)
         case .rejected(let reason) where reason != "not_available":
@@ -229,7 +352,7 @@ final class AppState: CallEventDelegate {
     }
 
     private func startTimedOut(gen: Int) {
-        guard case .pending(_, let g) = lease, g == gen else { return }
+        guard case .pending(_, let g, _) = lease, g == gen else { return }
         Log.info("AppState: start timed out")
         abortStart()
         bubble = .startFailed
@@ -254,6 +377,7 @@ final class AppState: CallEventDelegate {
     /// Единая точка освобождения: при живом звонке заново предлагает запись
     /// (кнопка была недоступна, пока Plaud был занят).
     private func releaseLease(reoffer: Bool = true) {
+        cancelAutoStop() // lease уходит — отсчёту не жить ни в каком виде
         lease = .idle
         guard reoffer, let app = activeCalls.last else { return }
         bubble = .callDetected(app: app, recordDisabledReason: recordDisabledReason())
