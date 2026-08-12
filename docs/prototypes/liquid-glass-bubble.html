@@ -132,10 +132,17 @@
     to   { transform: translateY(0)    scale(1);   opacity:1; }
   }
   .bubble .icon { width:17px; height:17px; flex:none; display:block; }
-  .bubble .countdown {
-    color:var(--text-dim); font-size:12px; font-weight:400;
-    font-variant-numeric: tabular-nums; /* цифры не прыгают при отсчёте */
+  /* Auto-stop: красная кнопка «тает» — сам индикатор отсчёта, без текста */
+  .gbtn.prominent { position:relative; overflow:hidden; }
+  .gbtn.prominent.draining { background: rgba(224,42,42,.30); }
+  .gbtn.prominent.draining .fill {
+    position:absolute; inset:0; border-radius:inherit;
+    background: linear-gradient(180deg, rgba(255,90,80,.95), rgba(224,42,42,.95));
+    transform-origin:left center;
+    animation: drain 10s linear forwards;
   }
+  .gbtn.prominent.draining .lbl { position:relative; }
+  @keyframes drain { to { transform: scaleX(0); } }
 
   .pulse { animation: pulse 1.6s ease-in-out infinite; }
   @keyframes pulse { 0%,100% { opacity:1; transform:scale(1);} 50% { opacity:.55; transform:scale(.88);} }
@@ -250,12 +257,12 @@ const tpl = {
   notice: (icon, text) => `${icon}<span>${text}</span>`,
   error: text => `${ICONS.warn('var(--yellow)')}<span>${text}</span>
      <button class="gbtn" onclick="hide()">Open Plaud</button>${xbtn}`,
-  /* Auto-stop: отсчёт + два выхода. ✕ прячет бабл, отсчёт продолжается. */
-  autoStop: left =>
+  /* Auto-stop: та же компоновка, что callEnded — отсчёт показывает «тающая»
+     красная кнопка. Клик = стоп сейчас, дотаяла = стоп сам, ✕ = оставить запись. */
+  autoStop: () =>
     `${ICONS.check('var(--green)')}<span>Call in Discord ended</span>
-     <span class="countdown">Stopping in ${left} s</span>
-     <button class="gbtn prominent" onclick="go('stopping')">Stop Now</button>
-     <button class="gbtn" onclick="keepRec()">Keep Recording</button>${xbtn}`,
+     <button class="gbtn prominent draining" onclick="go('stopping')"><span class="fill"></span><span class="lbl">Stop Recording</span></button>
+     <button class="gbtn xbtn" onclick="keepRec()" title="Keep recording">${ICONS.x}</button>`,
 };
 
 /* the user-visible moments (EN strings from the design) */
@@ -265,7 +272,7 @@ const STATES = {
   startingPlaud: { html: () => tpl.progress('Starting Plaud…'), hiddenChip: true },
   recording:     { html: () => tpl.notice(ICONS.record('var(--red)'), 'Recording started') },
   callEnded:     { html: () => tpl.action(ICONS.check('var(--green)'), 'Call in Discord ended', 'Stop Recording', 'stopping') },
-  autoStop:      { html: () => tpl.autoStop(autoStopLeft), enter: () => enterAutoStop() },
+  autoStop:      { html: () => tpl.autoStop(), enter: () => enterAutoStop() },
   keepRecording: { html: () => tpl.notice(ICONS.record('var(--red)'), 'Recording continues'), hiddenChip: true },
   stopping:      { html: () => tpl.progress('Stopping…'), hiddenChip: true },
   stopped:       { html: () => tpl.notice(ICONS.check('var(--green)'), 'Recording stopped'), hiddenChip: true },
@@ -279,7 +286,7 @@ const STATES = {
 
 const slot = document.getElementById('slot');
 let current = null, flowTimer = null;
-let autoStopLeft = 10, autoStopTimer = null;
+let autoStopTimer = null;
 
 function render(name) {
   if (name !== 'autoStop') clearAutoStop();
@@ -307,17 +314,11 @@ function stopFlow() { if (flowTimer) { flowTimer.forEach(clearTimeout); flowTime
 /* --- auto-stop --- */
 function enterAutoStop() {
   stopFlow(); clearAutoStop();
-  autoStopLeft = 10;
   render('autoStop');
-  autoStopTimer = setInterval(() => {
-    autoStopLeft--;
-    if (autoStopLeft <= 0) { clearAutoStop(); go('stopping'); return; }
-    const el = document.querySelector('.countdown');
-    if (el) el.textContent = `Stopping in ${autoStopLeft} s`; // без пере-рендера: pop не дёргается
-    else if (current !== 'autoStop') clearAutoStop();
-  }, 1000);
+  // CSS-drain на кнопке длится 10 s; таймер синхронно доводит до stopping
+  autoStopTimer = setTimeout(() => { autoStopTimer = null; go('stopping'); }, 10000);
 }
-function clearAutoStop() { if (autoStopTimer) { clearInterval(autoStopTimer); autoStopTimer = null; } }
+function clearAutoStop() { if (autoStopTimer) { clearTimeout(autoStopTimer); autoStopTimer = null; } }
 function keepRec() {
   clearAutoStop(); stopFlow();
   render('keepRecording');
@@ -366,7 +367,7 @@ document.getElementById('clock').textContent =
 /* gallery grouped by template */
 const GROUPS = [
   ['Action — иконка + текст + главная кнопка + ✕', ['callDetected', 'callEnded', 'alreadyRecording']],
-  ['Auto-stop (новое) — отсчёт + Stop Now / Keep Recording; ✕ прячет бабл, отсчёт идёт', ['autoStop', 'keepRecording']],
+  ['Auto-stop (новое) — красная кнопка тает 10 с: клик = стоп сейчас, дотаяла = стоп сам, ✕ = оставить запись', ['autoStop', 'keepRecording']],
   ['Progress — спиннер + текст', ['startingPlaud', 'starting', 'stopping']],
   ['Notice — иконка + текст, сам исчезает', ['recording', 'stopped']],
   ['Error — предупреждение + Open Plaud + ✕', ['error', 'errorStop']],
