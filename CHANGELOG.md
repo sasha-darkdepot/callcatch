@@ -9,6 +9,10 @@ them into a dated, tagged version (see "Versioning & releases" in the README).
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.4.0] — 2026-08-12
+
 ### Added
 - **Auto-stop**: a recording that started automatically now stops itself
   10 s after CallCatch detects the call end. The bubble's red button drains
