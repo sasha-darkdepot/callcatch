@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "projectName": "CallCatch",
+  "linearTeam": "CallCatch",
+  "languages": {
+    "linear": "Russian",
+    "repo": "English"
+  },
+  "artifactRoots": ["docs/superpowers", "docs/prototypes"],
+  "workflows": {
+    "implementation": null,
+    "ship": "gstack ship",
+    "documentation": null,
+    "reviewFeedback": "compound-engineering:ce-resolve-pr-feedback",
+    "deploy": "local install, no server: gh pr merge, then landing-guard check on the merge SHA; in the main checkout fast-forward to that SHA (git rev-parse HEAD must equal the PR mergeCommit), swift test, INSTALL=1 bash scripts/build-app.sh (signed build replaces /Applications/Call Catch.app and relaunches). Tagged releases are separate owner-approved tasks via scripts/release.sh X.Y.Z, which also folds changelog.d/ fragments into CHANGELOG.md",
+    "qa": "anthropic-skills:computer-use on the installed app (menu bar item, Settings, CALLCATCH_DEBUG=1 --test-bubble for bubble states); real-call checks with live Plaud are owner-run"
+  },
+  "prerequisites": {
+    "autoreviewHelper": true
+  },
+  "deployApproval": "risky-only",
+  "orchestration": {
+    "transport": "codex-cli",
+    "maxParallelWorkers": 2
+  },
+  "landing": {
+    "serialPaths": ["CHANGELOG.md"],
+    "changelog": {
+      "fragmentDir": "changelog.d",
+      "target": "CHANGELOG.md",
+      "heading": "## [Unreleased]"
+    },
+    "validation": {
+      "check": "build-test",
+      "timeoutSec": 1800
+    },
+    "install": "per-merge"
+  },
+  "issueOnlyLane": {
+    "enabled": true,
+    "ownerPrincipal": "c7fe3bbe-1fbc-4f33-8758-6743528076f3"
+  }
+}

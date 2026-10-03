@@ -106,7 +106,9 @@ re-verifying against live Plaud.
 | Human setup, usage, how-it-works | [README.md](README.md) |
 | Design rationale & decisions | [`docs/superpowers/specs/`](docs/superpowers/specs/) |
 | Implementation plan (TDD tasks) | [`docs/superpowers/plans/`](docs/superpowers/plans/) |
-| Release notes | [CHANGELOG.md](CHANGELOG.md) |
+| Release notes | [CHANGELOG.md](CHANGELOG.md) + pending `changelog.d/` |
+| Tasks, PRDs, specs (durable truth) | Linear team CallCatch (`CALL-N`) |
+| Mono workflow policy | [`.agents/mono-workflow.config.json`](.agents/mono-workflow.config.json) |
 | CI (build + test on macOS) | [`.github/workflows/ci.yml`](.github/workflows/ci.yml) |
 
 ## Releasing
@@ -114,8 +116,27 @@ re-verifying against live Plaud.
 Version is git-derived (SemVer): `build-app.sh` reads the marketing version from
 the latest `vX.Y.Z` tag and the build number from the commit count — nothing is
 hardcoded. **The one sanctioned way to release is `scripts/release.sh X.Y.Z`**:
-it runs tests, rolls CHANGELOG `[Unreleased] → [X.Y.Z]`, commits, tags, pushes,
-and installs the stamped build (refusing on a dirty/out-of-sync tree or a
-non-increasing version). Don't hand-tag or hand-edit the version — use the
-script so the version story can't drift. Accumulate changes under
-`## [Unreleased]` in CHANGELOG as you work.
+it runs tests, folds `changelog.d/*.md` plus anything under `[Unreleased]` into
+`[X.Y.Z]`, commits, tags, pushes, and installs the stamped build (refusing on a
+dirty/out-of-sync tree or a non-increasing version). Don't hand-tag or
+hand-edit the version — use the script so the version story can't drift.
+
+**Changelog notes go in `changelog.d/<ISSUE-KEY>.md`, never in `CHANGELOG.md`**
+(e.g. `changelog.d/CALL-12.md`: one or more Keep-a-Changelog bullets for a
+user-visible change). `CHANGELOG.md` is a Mono `landing.serialPaths` entry —
+an ordinary task branch that touches it fails the preflight gate; only a
+release edits it.
+
+## Planning & delivery (Linear + Mono)
+
+Work is tracked in the Linear team **CallCatch** (Issue keys `CALL-N`) and
+driven by the globally installed Mono Agent Workflow skill pack (`mono-*`
+skills; source `darkdepot/mono`). Repo policy lives in
+`.agents/mono-workflow.config.json` — the only Mono file this repo keeps; do
+not vendor `mono-*` skills, wrappers, lockfiles, or workflow checkers here.
+Linear holds the durable Project / PRD / Tech Spec / Issue truth; local
+`docs/superpowers/` plans and specs are discovery inputs, not execution
+approval — run `mono-handoff` before implementation begins. "Deploy" for this
+app means merge + local signed install (`INSTALL=1 bash scripts/build-app.sh`
+from `main` at the merge SHA); tagged releases are separate owner-approved
+tasks.

@@ -4,12 +4,12 @@ All notable changes to CallCatch are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/); the project
 follows [Semantic Versioning](https://semver.org). Newest first.
 
-New changes accumulate under **[Unreleased]**; `scripts/release.sh X.Y.Z` rolls
-them into a dated, tagged version (see "Versioning & releases" in the README).
+Each change adds its note as `changelog.d/<ISSUE-KEY>.md` (parallel branches
+never edit this file); `scripts/release.sh X.Y.Z` folds those notes and anything
+under **[Unreleased]** into a dated, tagged version (see "Versioning & releases"
+in the README).
 
 ## [Unreleased]
-
-_Nothing yet._
 
 ## [0.4.0] — 2026-08-12
 

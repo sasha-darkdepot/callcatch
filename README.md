@@ -132,8 +132,9 @@ As a personal 0.x tool the bumps mean:
 **The git tag `vX.Y.Z` is the single source of truth.** The build reads the
 marketing version from the latest tag and the build number from the commit
 count — nothing is hardcoded, so the version can't drift. `CHANGELOG.md` holds
-the human story: every change lands under `## [Unreleased]` until a release
-rolls it into a dated version.
+the human story: every change ships its note as `changelog.d/<ISSUE-KEY>.md`
+(so parallel branches never conflict on the changelog), and a release folds
+those notes into a dated version.
 
 **Cut a release with one command** (it runs the tests, rolls the changelog,
 commits, tags, pushes, and installs the stamped build — and refuses if the tree
