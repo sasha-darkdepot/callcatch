@@ -1,6 +1,6 @@
 import AppKit
 
-final class MenuBar: NSObject {
+final class MenuBar: NSObject, NSMenuDelegate {
     private let item: NSStatusItem
     private let attentionItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let findIdItem = NSMenuItem(title: "Find user_id Again", action: #selector(findIdTapped), keyEquivalent: "")
@@ -14,22 +14,26 @@ final class MenuBar: NSObject {
     private let onStop: () -> Void
     private let onFindUserId: () -> Void
     private let onAutoStopToggled: () -> Void
+    private let onMenuWillOpen: () -> Void
     private let settings: Settings
 
     init(settings: Settings,
          onRecord: @escaping () -> Void,
          onStop: @escaping () -> Void,
          onFindUserId: @escaping () -> Void,
-         onAutoStopToggled: @escaping () -> Void = {}) {
+         onAutoStopToggled: @escaping () -> Void = {},
+         onMenuWillOpen: @escaping () -> Void = {}) {
         self.settings = settings
         self.onRecord = onRecord
         self.onStop = onStop
         self.onFindUserId = onFindUserId
         self.onAutoStopToggled = onAutoStopToggled
+        self.onMenuWillOpen = onMenuWillOpen
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         super.init()
 
         let menu = NSMenu()
+        menu.delegate = self
         menu.autoenablesItems = false
         [attentionItem, findIdItem, recordItem, stopItem, .separator(), autoItem, autoStopItem, loginItem, .separator()]
             .forEach { menu.addItem($0) }
@@ -46,6 +50,8 @@ final class MenuBar: NSObject {
         item.menu = menu
         update(status: .watching, canRecordNow: false, canStopNow: false)
     }
+
+    func menuWillOpen(_ menu: NSMenu) { onMenuWillOpen() }
 
     func update(status: MenuStatus, canRecordNow: Bool, canStopNow: Bool) {
         let symbol: String

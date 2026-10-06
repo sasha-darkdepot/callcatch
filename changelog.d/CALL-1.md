@@ -1,0 +1,1 @@
+- Changed: Record Now works without a detected call, and Stop Recording can stop recordings started directly in Plaud; manual recordings stay under your control.
