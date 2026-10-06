@@ -87,7 +87,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, AppStateDelegate {
                 self?.settings.rescanUserId()
                 self?.appState.refreshMenu()
             },
-            onAutoStopToggled: { [weak self] in self?.appState.autoStopToggled() }
+            onAutoStopToggled: { [weak self] in self?.appState.autoStopToggled() },
+            onMenuWillOpen: { [weak self] in self?.appState.refreshMenu() }
         )
 
         tracker.delegate = appState

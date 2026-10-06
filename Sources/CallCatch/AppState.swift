@@ -42,8 +42,8 @@ protocol AppStateDelegate: AnyObject {
 final class AppState: CallEventDelegate {
     private enum Lease: Equatable {
         case idle
-        case pending(owner: WatchedApp, generation: Int, automatic: Bool)
-        case confirmed(owner: WatchedApp, recordingId: String, automatic: Bool)
+        case pending(owner: WatchedApp?, generation: Int, automatic: Bool)
+        case confirmed(owner: WatchedApp?, recordingId: String, automatic: Bool)
     }
 
     /// Отсчёт авто-стопа — ЕДИНОЕ опциональное значение: любая отмена зануляет
@@ -70,6 +70,8 @@ final class AppState: CallEventDelegate {
     private var lease: Lease = .idle
     private var generation = 0
     private var stopInFlight = false
+    private var stopOperation = 0
+    private var activeStopOperation: Int?
     private var autoStopCountdown: AutoStopCountdown?
     private var unattendedStopRetried = false
     private var stopRetryTimer: Cancellable?
@@ -89,6 +91,7 @@ final class AppState: CallEventDelegate {
     /// Монотонные часы: scheduler не умеет отвечать «сколько прошло», а
     /// ховер-пауза требует точного остатка. В тестах — MockClock.
     private let now: () -> TimeInterval
+    private let infoLog: (String) -> Void
 
     init(plaud: PlaudControlling,
          autoRecord: @escaping () -> Bool,
@@ -96,6 +99,7 @@ final class AppState: CallEventDelegate {
          micCurrentlyActive: @escaping (WatchedApp) -> Bool = { _ in true },
          autoStopEnabled: @escaping () -> Bool = { false },
          now: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+         infoLog: @escaping (String) -> Void = { Log.info($0) },
          scheduler: @escaping (TimeInterval, @escaping () -> Void) -> Cancellable) {
         self.plaud = plaud
         self.autoRecord = autoRecord
@@ -103,6 +107,7 @@ final class AppState: CallEventDelegate {
         self.micCurrentlyActive = micCurrentlyActive
         self.autoStopEnabled = autoStopEnabled
         self.now = now
+        self.infoLog = infoLog
         self.scheduler = scheduler
     }
 
@@ -110,7 +115,7 @@ final class AppState: CallEventDelegate {
     private func scheduleAutoRecord(_ app: WatchedApp) {
         guard lease == .idle, userIdAvailable(), autoRecord() else { return }
         autoTimers[app] = scheduler(7.0) { [weak self] in
-            guard let self, self.activeCalls.contains(app), self.lease == .idle,
+            guard let self, self.activeCalls.contains(app), self.commandAvailability().recordReason == nil,
                   self.micCurrentlyActive(app) else { return }
             self.beginStart(owner: app, automatic: true)
         }
@@ -144,7 +149,9 @@ final class AppState: CallEventDelegate {
             retryTimer = nil
             bubble = .hidden
         case .confirmed(let owner, _, _):
-            if activeCalls.isEmpty {
+            if owner == nil {
+                if case .callDetected(let a, _) = bubble, a == app { bubble = .hidden }
+            } else if activeCalls.isEmpty {
                 settleConfirmedRecordingAfterQuiet()
             } else if owner == app {
                 // Звонок-владелец кончился, но другой ещё идёт: ручное
@@ -165,7 +172,7 @@ final class AppState: CallEventDelegate {
     /// Инвариант «последний звонок вышел»: владелец lease НЕ важен (кросс-апп
     /// перекрытия ломали владельческий вариант в обе стороны — ревью-финдинг).
     private func settleConfirmedRecordingAfterQuiet() {
-        guard case .confirmed(let owner, _, let automatic) = lease else { return }
+        guard case .confirmed(let owner?, _, let automatic) = lease else { return }
         // Стоп уже в полёте — не строим поверх него ни отсчёт, ни предложение
         // (иначе «мёртвая» тающая кнопка и второй HID-клик — ревью-финдинг).
         guard !stopInFlight else { return }
@@ -181,32 +188,56 @@ final class AppState: CallEventDelegate {
     // MARK: - Входы UI
 
     func recordTapped() {
-        guard lease == .idle, userIdAvailable(), let app = activeCalls.last else { return }
-        beginStart(owner: app, automatic: false)
+        if let reason = commandAvailability().recordReason {
+            infoLog("AppState: manual start refused reason=\(reason)")
+            pushMenu()
+            return
+        }
+        infoLog("AppState: manual start requested source=\(activeCalls.last?.rawValue ?? "no call")")
+        beginStart(owner: activeCalls.last, automatic: false)
     }
 
     func stopTapped() {
+        if let reason = commandAvailability().stopReason {
+            infoLog("AppState: manual stop refused reason=\(reason)")
+            pushMenu()
+            return
+        }
+        infoLog("AppState: manual stop requested")
         cancelAutoStop()
         initiateStop(attended: true)
     }
 
     private func initiateStop(attended: Bool) {
-        guard case .confirmed(_, let rid, _) = lease, !stopInFlight else { return }
+        guard !stopInFlight else { return }
+        let expectedLease = lease
+        let rid: String?
+        switch lease {
+        case .confirmed(_, let recordingId, _): rid = recordingId
+        case .idle where attended: rid = nil // externally started recording; no lease adoption
+        default: return
+        }
         cancelAutoStop() // отсчёт и стоп-в-полёте не сосуществуют никогда
+        stopOperation += 1
+        let operation = stopOperation
+        activeStopOperation = operation
         stopInFlight = true
         bubble = .stopping
         pushMenu() // canStopNow гаснет сразу — повторный клик невозможен
         plaud.performAXStop { [weak self] ok in
-            guard let self else { return }
+            // Validate the operation BEFORE touching any shared state, including
+            // stopInFlight. A duplicate/late callback may belong to an old stop.
+            guard let self, self.activeStopOperation == operation else { return }
+            self.activeStopOperation = nil
             self.stopInFlight = false
-            // Привязка к конкретной записи: если lease уже не та (стоп сработал
-            // иначе / началась новая запись) — устаревший результат не применяем.
-            guard case .confirmed(_, let current, _) = self.lease, current == rid else {
+            guard self.lease == expectedLease else {
+                self.infoLog("AppState: stop completion ignored reason=lease changed")
                 self.pushMenu()
                 return
             }
+            if attended { self.infoLog("AppState: manual stop completed success=\(ok)") }
             if ok {
-                self.releaseLease()
+                if rid != nil { self.releaseLease() }
                 self.bubble = .stopped
                 self.scheduleBubbleAutoHide(2)
             } else if !attended, !self.activeCalls.isEmpty {
@@ -214,7 +245,7 @@ final class AppState: CallEventDelegate {
                 // покроет и его), окно Plaud посреди звонка не поднимаем, ретрай
                 // не планируем (ревью-финдинг: ретрай, взведённый после отмены
                 // отсчёта новым звонком, обрезал запись посреди этого звонка).
-                Log.info("AppState: unattended stop failed with a live call — leaving recording")
+                self.infoLog("AppState: unattended stop failed with a live call — leaving recording")
                 if case .stopping = self.bubble { self.bubble = .hidden }
             } else if !attended, !self.unattendedStopRetried {
                 // Hands-free стоп: один тихий ретрай прежде чем звать человека,
@@ -230,7 +261,7 @@ final class AppState: CallEventDelegate {
                 self.plaud.openPlaudWindow()
                 self.bubble = .stopFailed
                 self.scheduleBubbleAutoHide(60)
-                self.startAXWatch(recordingId: rid)
+                if let rid { self.startAXWatch(recordingId: rid) }
             }
             self.pushMenu()
         }
@@ -307,13 +338,13 @@ final class AppState: CallEventDelegate {
         if plaud.pollRecordingStopped() || !plaud.isPlaudRunning() {
             // Уже остановлено в самом Plaud — не кликаем в мёртвый виджет
             // (это подняло бы окно Plaud через stopFailed).
-            Log.info("AppState: auto-stop skipped — recording already ended externally")
+            infoLog("AppState: auto-stop skipped — recording already ended externally")
             bubble = .hidden
             releaseLease()
             pushMenu()
             return
         }
-        Log.info("AppState: auto-stop firing (retry=\(unattendedStopRetried))")
+        infoLog("AppState: auto-stop firing (retry=\(unattendedStopRetried))")
         initiateStop(attended: false)
     }
 
@@ -343,14 +374,16 @@ final class AppState: CallEventDelegate {
 
     // MARK: - Старт записи
 
-    private func beginStart(owner: WatchedApp, automatic: Bool) {
+    private func beginStart(owner: WatchedApp?, automatic: Bool) {
         autoStopSuppressed = false // новая запись — чистый лист для авто-стопа
         generation += 1
         plaud.makeCheckpoint()
         plaud.sendStartDeepLink()
         lease = .pending(owner: owner, generation: generation, automatic: automatic)
-        bubble = .starting(app: owner, launchingPlaud: !plaud.isPlaudRunning())
-        Log.debug("AppState: beginStart(\(owner.rawValue)) gen=\(generation)")
+        if let owner {
+            bubble = .starting(app: owner, launchingPlaud: !plaud.isPlaudRunning())
+        }
+        Log.debug("AppState: beginStart(\(owner?.rawValue ?? "manual")) gen=\(generation)")
         scheduleRetry()
         let gen = generation
         startDeadlineTimer = scheduler(60.0) { [weak self] in self?.startTimedOut(gen: gen) }
@@ -364,7 +397,7 @@ final class AppState: CallEventDelegate {
         // Без этого lease завис бы .confirmed навсегда, блокируя все будущие записи.
         if case .confirmed = lease, !stopInFlight {
             if plaud.pollRecordingStopped() || !plaud.isPlaudRunning() {
-                Log.info("AppState: recording ended externally (stop or Plaud gone), releasing lease")
+                infoLog("AppState: recording ended externally (stop or Plaud gone), releasing lease")
                 if case .callEndedOfferStop = bubble { bubble = .hidden }
                 if case .callEndedAutoStop = bubble { bubble = .hidden } // тающий бабл без записи — мусор
                 if case .stopping = bubble { bubble = .hidden } // спиннер, чей ретрай ждал 5 с — тоже (ревью-финдинг)
@@ -376,10 +409,10 @@ final class AppState: CallEventDelegate {
         guard case .pending(let owner, _, let automatic) = lease else { return }
         switch plaud.pollStartOutcome() {
         case .success(let rid):
-            Log.info("AppState: start confirmed recordingId=\(rid)")
+            infoLog("AppState: start confirmed recordingId=\(rid)")
             finishStartTimers()
             lease = .confirmed(owner: owner, recordingId: rid, automatic: automatic)
-            if activeCalls.isEmpty {
+            if owner != nil, activeCalls.isEmpty {
                 // Поздний успех: звонок уже закончился — сразу решаем судьбу
                 // записи (авто-стоп/предложение), а не показываем «началась».
                 settleConfirmedRecordingAfterQuiet()
@@ -388,7 +421,7 @@ final class AppState: CallEventDelegate {
                 scheduleBubbleAutoHide(2)
             }
         case .rejected(let reason) where reason != "not_available":
-            Log.info("AppState: start rejected reason=\(reason)")
+            infoLog("AppState: start rejected reason=\(reason)")
             finishStartTimers()
             releaseLease(reoffer: false)
             bubble = .startFailed
@@ -410,12 +443,12 @@ final class AppState: CallEventDelegate {
     }
 
     private func startTimedOut(gen: Int) {
-        guard case .pending(_, let g, _) = lease, g == gen else { return }
-        Log.info("AppState: start timed out")
+        guard case .pending(let owner, let g, _) = lease, g == gen else { return }
+        infoLog("AppState: start timed out")
         abortStart()
-        // Показ ошибки уместен только при живом звонке; для давно закончившегося
-        // (pending пережил callEnded ради позднего успеха) — тихо освобождаемся.
-        if !activeCalls.isEmpty {
+        // No-call manual starts always report failure. A call-owned pending
+        // start whose call ended still releases quietly, as before.
+        if owner == nil || !activeCalls.isEmpty {
             bubble = .startFailed
             scheduleBubbleAutoHide(60)
         }
@@ -451,8 +484,21 @@ final class AppState: CallEventDelegate {
 
     private func recordDisabledReason() -> String? {
         if lease != .idle { return "Plaud is already recording" }
-        if !userIdAvailable() { return "user_id not found" }
-        return nil
+        return commandAvailability().recordReason
+    }
+
+    /// Fresh adapter observations are shared by menu rendering and command guards.
+    private func commandAvailability() -> (recordReason: String?, stopReason: String?) {
+        if stopInFlight { return ("stop in flight", "stop in flight") }
+        switch lease {
+        case .pending: return ("start in flight", "start in flight")
+        case .confirmed: return ("Plaud is already recording", nil)
+        case .idle:
+            let externalRecording = plaud.isPlaudRunning() && plaud.isRecordingVisibleViaAX() == true
+            let recordReason: String? = !userIdAvailable() ? "user_id not found" :
+                (externalRecording ? "Plaud is already recording" : nil)
+            return (recordReason, externalRecording ? nil : "no visible recording")
+        }
     }
 
     // MARK: - AX-поллинг после fallback-стопа
@@ -466,6 +512,10 @@ final class AppState: CallEventDelegate {
         func tick() {
             axWatchTimer = scheduler(10.0) { [weak self] in
                 guard let self, case .confirmed(_, let cur, _) = self.lease, cur == rid else { return }
+                if self.stopInFlight {
+                    tick() // let the stop's own confirmation settle the lease first
+                    return
+                }
                 ticks += 1
                 let visible = self.plaud.isRecordingVisibleViaAX()
                 // Plaud выключен => запись точно не идёт; nil при живом Plaud — неопределимо.
@@ -477,7 +527,8 @@ final class AppState: CallEventDelegate {
                     tick()
                 } else {
                     // Исчерпание наблюдения не должно навсегда блокировать новые записи:
-                    // освобождение lease не трогает запись, лишь разрешает старты.
+                    // освобождение lease не трогает запись; AX всё ещё блокирует старты,
+                    // если видит запись, и разрешает повторный ручной стоп.
                     Log.debug("AppState: AX watch exhausted, releasing lease anyway")
                     self.releaseLease()
                     self.pushMenu()
@@ -505,9 +556,8 @@ final class AppState: CallEventDelegate {
         case .pending: status = .callActive
         case .idle: status = activeCalls.isEmpty ? .watching : .callActive
         }
-        let canRecord = lease == .idle && !activeCalls.isEmpty && userIdAvailable()
-        let canStop: Bool
-        if case .confirmed = lease { canStop = !stopInFlight } else { canStop = false }
-        delegate?.menuChanged(status: status, canRecordNow: canRecord, canStopNow: canStop)
+        let availability = commandAvailability()
+        delegate?.menuChanged(status: status, canRecordNow: availability.recordReason == nil,
+                             canStopNow: availability.stopReason == nil)
     }
 }

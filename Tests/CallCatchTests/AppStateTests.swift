@@ -48,6 +48,7 @@ final class AppStateTests: XCTestCase {
     var userIdKnown = true
     var micActive = true
     var clock = MockClock()
+    var diagnostics: [String] = []
 
     override func setUp() {
         plaud = MockPlaud()
@@ -58,6 +59,7 @@ final class AppStateTests: XCTestCase {
         userIdKnown = true
         micActive = true
         clock = MockClock()
+        diagnostics = []
     }
 
     func makeState() -> AppState {
@@ -66,6 +68,7 @@ final class AppStateTests: XCTestCase {
                          micCurrentlyActive: { _ in self.micActive },
                          autoStopEnabled: { self.autoStopMode },
                          now: { self.clock.now },
+                         infoLog: { self.diagnostics.append($0) },
                          scheduler: scheduler.schedule)
         s.delegate = log
         return s
@@ -97,6 +100,385 @@ final class AppStateTests: XCTestCase {
         let s = makeState()
         s.callStarted(app: .discord)
         XCTAssertEqual(log.bubbles.last, .callDetected(app: .discord, recordDisabledReason: nil))
+    }
+
+    func testNoCallManualStartUsesExistingConfirmationPath() {
+        let s = makeState()
+        s.refreshMenu()
+        XCTAssertTrue(log.menu.last!.canRecord)
+        s.recordTapped()
+        XCTAssertEqual(plaud.checkpoints, 1)
+        XCTAssertEqual(plaud.deepLinksSent, 1)
+        XCTAssertTrue(log.bubbles.isEmpty) // no starting bubble without a call
+        XCTAssertFalse(log.menu.last!.canRecord)
+        XCTAssertFalse(log.menu.last!.canStop)
+        plaud.outcome = .success(recordingId: "42")
+        s.tickPollStart()
+        XCTAssertEqual(log.bubbles.last, .recordingStarted)
+        XCTAssertTrue(log.menu.last!.canStop)
+        XCTAssertTrue(diagnostics.contains { $0.contains("manual start") })
+    }
+
+    func testIdleMenuAvailabilityAndDirectStartFollowPlaudState() {
+        let cases: [(Bool, Bool, Bool?, Bool, Bool)] = [
+            (false, false, nil, false, false),
+            (false, true, true, false, true),
+            (false, true, false, false, false),
+            (false, true, nil, false, false),
+            (true, false, nil, true, false),
+            (true, true, true, false, true),
+            (true, true, false, true, false),
+            (true, true, nil, true, false)
+        ]
+        for (known, running, ax, record, stop) in cases {
+            setUp()
+            userIdKnown = known
+            plaud.running = running
+            plaud.axRecordingVisible = ax
+            let s = makeState()
+            s.refreshMenu()
+            XCTAssertEqual(log.menu.last!.canRecord, record, "known=\(known) running=\(running) AX=\(String(describing: ax))")
+            XCTAssertEqual(log.menu.last!.canStop, stop)
+            s.recordTapped()
+            XCTAssertEqual(plaud.deepLinksSent, record ? 1 : 0)
+            XCTAssertEqual(plaud.checkpoints, record ? 1 : 0)
+            if !record {
+                XCTAssertTrue(diagnostics.contains { $0.contains("manual start refused") && $0.contains("reason=") })
+            }
+        }
+    }
+
+    func testNoCallColdStartRetainsLeaseThroughNotAvailableAndRetries() {
+        plaud.running = false
+        let s = makeState()
+        s.recordTapped()
+        plaud.outcome = .rejected(reason: "not_available")
+        s.tickPollStart()
+        XCTAssertTrue(log.bubbles.isEmpty)
+        XCTAssertFalse(log.menu.last!.canRecord)
+        XCTAssertFalse(log.menu.last!.canStop)
+        scheduler.fireAll(delay: 5)
+        XCTAssertEqual(plaud.deepLinksSent, 2)
+        plaud.running = true
+        plaud.outcome = .success(recordingId: "42")
+        s.tickPollStart()
+        XCTAssertEqual(log.bubbles.last, .recordingStarted)
+        scheduler.fireAll(delay: 5)
+        scheduler.fireAll(delay: 60)
+        XCTAssertEqual(plaud.deepLinksSent, 2)
+        XCTAssertTrue(log.menu.last!.canStop)
+    }
+
+    func testNoCallStartTimeoutShowsFailureAndReleasesLease() {
+        let s = makeState()
+        s.recordTapped()
+        scheduler.fireAll(delay: 60)
+        XCTAssertEqual(log.bubbles.last, .startFailed)
+        XCTAssertTrue(log.menu.last!.canRecord)
+        XCTAssertFalse(log.menu.last!.canStop)
+        scheduler.fireAll(delay: 5)
+        XCTAssertEqual(plaud.deepLinksSent, 1)
+        plaud.outcome = .success(recordingId: "late")
+        s.tickPollStart()
+        XCTAssertFalse(log.menu.last!.canStop)
+    }
+
+    func testNoCallStartNonTransientRejectionReleasesLease() {
+        let s = makeState()
+        s.recordTapped()
+        plaud.outcome = .rejected(reason: "user_mismatch")
+        s.tickPollStart()
+        XCTAssertEqual(log.bubbles.last, .startFailed)
+        XCTAssertTrue(log.menu.last!.canRecord)
+        scheduler.fireAll(delay: 5)
+        scheduler.fireAll(delay: 60)
+        XCTAssertEqual(plaud.deepLinksSent, 1)
+    }
+
+    func testDirectManualStartRefusedForPendingAndConfirmedLease() {
+        let s = makeState()
+        s.recordTapped()
+        s.recordTapped()
+        XCTAssertTrue(diagnostics.contains { $0.contains("manual start refused") && $0.contains("start in flight") })
+        plaud.outcome = .success(recordingId: "42")
+        s.tickPollStart()
+        for ax in [true, false, nil] as [Bool?] {
+            plaud.axRecordingVisible = ax
+            userIdKnown = false // confirmed lease takes precedence
+            s.refreshMenu()
+            XCTAssertFalse(log.menu.last!.canRecord)
+            XCTAssertTrue(log.menu.last!.canStop)
+            s.recordTapped()
+        }
+        XCTAssertEqual(plaud.deepLinksSent, 1)
+        XCTAssertTrue(diagnostics.contains { $0.contains("manual start refused") && $0.contains("already recording") })
+    }
+
+    func testNoCallManualStopReleasesLeaseOnSuccess() {
+        let s = makeState()
+        s.recordTapped()
+        plaud.outcome = .success(recordingId: "42")
+        s.tickPollStart()
+        s.stopTapped()
+        XCTAssertEqual(plaud.axStopCalls, 1)
+        XCTAssertEqual(log.bubbles.suffix(2), [.stopping, .stopped])
+        XCTAssertTrue(log.menu.last!.canRecord)
+        XCTAssertFalse(log.menu.last!.canStop)
+        XCTAssertTrue(diagnostics.contains { $0.contains("manual stop requested") })
+    }
+
+    func testNoCallManualStopFailureKeepsOwnLeaseAndUsesFallback() {
+        let s = makeState()
+        s.recordTapped()
+        plaud.outcome = .success(recordingId: "42")
+        s.tickPollStart()
+        plaud.axStopResult = false
+        s.stopTapped()
+        XCTAssertEqual(plaud.openedWindow, 1)
+        XCTAssertEqual(log.bubbles.last, .stopFailed)
+        XCTAssertTrue(log.menu.last!.canStop) // own confirmed lease, even AX=false
+        XCTAssertFalse(log.menu.last!.canRecord)
+        scheduler.fireAll(delay: 10)
+        XCTAssertTrue(log.menu.last!.canRecord) // own AX watch sees manual stop
+    }
+
+    func testExternalStopWorksWithoutUserIdAndBlocksAllCommandsInFlight() {
+        userIdKnown = false
+        plaud.axRecordingVisible = true
+        plaud.axStopAsync = true
+        let s = makeState()
+        s.refreshMenu()
+        s.stopTapped()
+        XCTAssertEqual(plaud.axStopCalls, 1)
+        XCTAssertEqual(log.bubbles.last, .stopping)
+        XCTAssertFalse(log.menu.last!.canRecord)
+        XCTAssertFalse(log.menu.last!.canStop)
+        userIdKnown = true
+        plaud.axRecordingVisible = false
+        s.recordTapped()
+        s.stopTapped()
+        s.refreshMenu()
+        XCTAssertEqual(plaud.deepLinksSent, 0)
+        XCTAssertEqual(plaud.axStopCalls, 1)
+        XCTAssertFalse(log.menu.last!.canRecord)
+        XCTAssertTrue(diagnostics.contains { $0.contains("manual start refused reason=stop in flight") })
+        XCTAssertTrue(diagnostics.contains { $0.contains("manual stop refused reason=stop in flight") })
+        guard let completion = plaud.pendingStopCompletions.first else {
+            return XCTFail("external stop must start")
+        }
+        completion(true)
+        XCTAssertEqual(log.bubbles.last, .stopped)
+        XCTAssertTrue(log.menu.last!.canRecord)
+        XCTAssertFalse(log.menu.last!.canStop)
+    }
+
+    func testExternalStopFailureHasFallbackAndCanRetryWhileVisible() {
+        plaud.axRecordingVisible = true
+        plaud.axStopResult = false
+        let s = makeState()
+        s.refreshMenu()
+        s.stopTapped()
+        XCTAssertEqual(plaud.openedWindow, 1)
+        XCTAssertEqual(log.bubbles.last, .stopFailed)
+        XCTAssertTrue(log.menu.last!.canStop)
+        XCTAssertFalse(log.menu.last!.canRecord)
+        XCTAssertFalse(scheduler.timers.contains { $0.delay == 10 }) // no own recording AX watch
+        s.stopTapped()
+        XCTAssertEqual(plaud.axStopCalls, 2)
+        plaud.axRecordingVisible = false
+        s.refreshMenu()
+        XCTAssertTrue(log.menu.last!.canRecord)
+        XCTAssertFalse(log.menu.last!.canStop)
+        s.stopTapped()
+        XCTAssertEqual(plaud.axStopCalls, 2)
+        XCTAssertTrue(diagnostics.contains { $0.contains("manual stop refused reason=no visible recording") })
+    }
+
+    func testExternalStopLateDuplicateCannotMutateNewRecordingOrStop() {
+        plaud.axRecordingVisible = true
+        plaud.axStopAsync = true
+        let s = makeState()
+        s.stopTapped()
+        guard let oldCompletion = plaud.pendingStopCompletions.first else {
+            return XCTFail("external stop must start")
+        }
+        plaud.axRecordingVisible = false
+        oldCompletion(true)
+        s.recordTapped()
+        plaud.outcome = .success(recordingId: "new")
+        s.tickPollStart()
+        oldCompletion(false)
+        XCTAssertEqual(log.bubbles.last, .recordingStarted)
+        XCTAssertEqual(plaud.openedWindow, 0)
+        XCTAssertTrue(log.menu.last!.canStop)
+        s.stopTapped()
+        oldCompletion(true)
+        XCTAssertEqual(log.bubbles.last, .stopping)
+        XCTAssertFalse(log.menu.last!.canStop)
+        s.recordTapped()
+        s.stopTapped()
+        XCTAssertEqual(plaud.deepLinksSent, 1)
+        XCTAssertEqual(plaud.axStopCalls, 2)
+        plaud.pendingStopCompletions.last?(true)
+        XCTAssertEqual(log.bubbles.last, .stopped)
+    }
+
+    func testStopCommandRechecksExternalAXAndRunningState() {
+        let s = makeState()
+        plaud.axRecordingVisible = true
+        s.refreshMenu()
+        XCTAssertTrue(log.menu.last!.canStop)
+        for ax in [false, nil] as [Bool?] {
+            plaud.axRecordingVisible = ax
+            s.stopTapped()
+        }
+        plaud.axRecordingVisible = true
+        plaud.running = false
+        s.stopTapped()
+        XCTAssertEqual(plaud.axStopCalls, 0)
+        XCTAssertEqual(diagnostics.filter { $0.contains("manual stop refused reason=") }.count, 3)
+        s.recordTapped()
+        s.stopTapped()
+        XCTAssertEqual(plaud.axStopCalls, 0)
+        XCTAssertTrue(diagnostics.contains { $0.contains("manual stop refused reason=start in flight") })
+    }
+
+    func testNoCallManualRecordingNeverAdoptsLaterCall() {
+        autoMode = true
+        autoStopMode = true
+        let s = makeState()
+        s.recordTapped()
+        plaud.outcome = .success(recordingId: "42")
+        s.tickPollStart()
+        scheduler.fireAll(delay: 2)
+        s.callStarted(app: .discord)
+        XCTAssertEqual(log.bubbles.last, .callDetected(app: .discord, recordDisabledReason: "Plaud is already recording"))
+        scheduler.fireAll(delay: 7)
+        s.callEnded(app: .discord)
+        XCTAssertEqual(log.bubbles.last, .hidden)
+        scheduler.fireAll(delay: 10)
+        XCTAssertEqual(plaud.deepLinksSent, 1)
+        XCTAssertEqual(plaud.axStopCalls, 0)
+        XCTAssertTrue(log.menu.last!.canStop)
+        XCTAssertFalse(log.bubbles.contains(.callEndedOfferStop(app: .discord)))
+        XCTAssertFalse(log.bubbles.contains(.callEndedAutoStop(app: .discord)))
+    }
+
+    func testNoCallPendingManualStartSurvivesLaterCallEnding() {
+        autoMode = true
+        autoStopMode = true
+        let s = makeState()
+        s.recordTapped()
+        s.callStarted(app: .telegram)
+        s.callEnded(app: .telegram)
+        XCTAssertEqual(log.bubbles.last, .hidden)
+        scheduler.fireAll(delay: 5)
+        XCTAssertEqual(plaud.deepLinksSent, 2) // later call doesn't cancel no-call retry
+        plaud.outcome = .success(recordingId: "42")
+        s.tickPollStart()
+        XCTAssertEqual(log.bubbles.last, .recordingStarted)
+        scheduler.fireAll(delay: 7)
+        scheduler.fireAll(delay: 10)
+        XCTAssertEqual(plaud.deepLinksSent, 2)
+        XCTAssertEqual(plaud.axStopCalls, 0)
+    }
+
+    func testAutoRecordTimerCannotStartDuringExternalStop() {
+        autoMode = true
+        let s = makeState()
+        s.callStarted(app: .discord) // timer armed before external recording appears
+        plaud.axRecordingVisible = true
+        plaud.axStopAsync = true
+        s.stopTapped()
+        plaud.axRecordingVisible = false // widget disappears before log confirmation
+        scheduler.fireAll(delay: 7)
+        XCTAssertEqual(plaud.deepLinksSent, 0)
+        XCTAssertFalse(log.menu.last!.canRecord)
+        XCTAssertFalse(log.menu.last!.canStop)
+    }
+
+    func testAutoRecordTimerRechecksExternalRecordingAndUserId() {
+        for missingId in [false, true] {
+            setUp()
+            autoMode = true
+            let s = makeState()
+            s.callStarted(app: .discord)
+            if missingId { userIdKnown = false } else { plaud.axRecordingVisible = true }
+            scheduler.fireAll(delay: 7)
+            XCTAssertEqual(plaud.deepLinksSent, 0)
+        }
+    }
+
+    func testAutoRecordStartsWhenExternalRecordingEndsBeforeCallTimerFires() {
+        autoMode = true
+        plaud.axRecordingVisible = true
+        let s = makeState()
+        s.callStarted(app: .discord)
+        XCTAssertEqual(plaud.deepLinksSent, 0)
+        plaud.axRecordingVisible = false
+        scheduler.fireAll(delay: 7)
+        XCTAssertEqual(plaud.deepLinksSent, 1)
+    }
+
+    func testAutoRecordStartsWhenExternalStopCompletesBeforeCallTimerFires() {
+        autoMode = true
+        plaud.axRecordingVisible = true
+        plaud.axStopAsync = true
+        let s = makeState()
+        s.stopTapped()
+        s.callStarted(app: .discord)
+        XCTAssertEqual(plaud.deepLinksSent, 0)
+        plaud.axRecordingVisible = false
+        plaud.pendingStopCompletions.first?(true)
+        scheduler.fireAll(delay: 7)
+        XCTAssertEqual(plaud.deepLinksSent, 1)
+    }
+
+    func testIdleRefreshUsesCurrentAXWithoutCallEvents() {
+        let s = makeState()
+        s.refreshMenu()
+        XCTAssertTrue(log.menu.last!.canRecord)
+        XCTAssertFalse(log.menu.last!.canStop)
+        plaud.axRecordingVisible = true
+        s.refreshMenu()
+        XCTAssertFalse(log.menu.last!.canRecord)
+        XCTAssertTrue(log.menu.last!.canStop)
+        plaud.axRecordingVisible = false
+        s.refreshMenu()
+        XCTAssertTrue(log.menu.last!.canRecord)
+        XCTAssertFalse(log.menu.last!.canStop)
+    }
+
+    func testOwnStopLateDuplicateCannotClearNewStopInFlight() {
+        let s = makeRecordingState()
+        plaud.axStopAsync = true
+        s.stopTapped()
+        let oldCompletion = plaud.pendingStopCompletions[0]
+        oldCompletion(true)
+        s.recordTapped()
+        plaud.outcome = .success(recordingId: "new")
+        s.tickPollStart()
+        s.stopTapped()
+        oldCompletion(false)
+        s.stopTapped()
+        XCTAssertEqual(plaud.axStopCalls, 2)
+        XCTAssertEqual(log.bubbles.last, .stopping)
+        XCTAssertFalse(log.menu.last!.canStop)
+        XCTAssertEqual(plaud.openedWindow, 0)
+    }
+
+    func testOwnFallbackWatchCannotReleaseLeaseDuringRetryStop() {
+        let s = makeRecordingState()
+        plaud.axStopResult = false
+        s.stopTapped() // starts own-recording AX watch
+        plaud.axStopAsync = true
+        s.stopTapped()
+        scheduler.fireAll(delay: 10) // AX=false while stop confirmation still pending
+        XCTAssertFalse(log.menu.last!.canRecord)
+        XCTAssertFalse(log.menu.last!.canStop)
+        plaud.pendingStopCompletions.first?(true)
+        XCTAssertEqual(log.bubbles.last, .stopped)
+        XCTAssertTrue(log.menu.last!.canRecord)
     }
 
     func testRecordTappedSendsDeepLinkAfterCheckpoint() {
@@ -279,7 +661,9 @@ final class AppStateTests: XCTestCase {
         plaud.axRecordingVisible = true // AX «видит запись» вечно
         s.stopTapped()                  // fallback + запуск watch
         for _ in 0..<31 { scheduler.fireAll(delay: 10.0) }
-        XCTAssertFalse(log.menu.last!.canStop) // lease освобождён после исчерпания
+        // CALL-1: lease is released, but the visible external recording stays stoppable.
+        XCTAssertTrue(log.menu.last!.canStop)
+        XCTAssertFalse(log.menu.last!.canRecord)
     }
 
     func testAXWatchReleasesWhenPlaudQuit() { // ревью #1 (nil != false)

@@ -68,9 +68,14 @@ Without `INSTALL=1` the app is built to `build/CallCatch.app` and not copied.
 A call starts → the bubble appears → **Record in Plaud**. The call ends → the
 bubble offers **Stop Recording**. Everything is also in the menu-bar menu:
 
-- **Record Now** — start manually during a call (e.g. if you dismissed the bubble).
-- **Stop Recording** — available while a CallCatch-started recording runs
-  (except for the brief moment a stop attempt is already in flight).
+- **Record Now** — start manually at any time, even without a detected call.
+  Requires a known user_id and no recording owned by CallCatch or visible in
+  Plaud. It can launch Plaud if needed; an unknown Accessibility result allows
+  a start attempt, which still needs confirmation from Plaud's log.
+- **Stop Recording** — stop a CallCatch-started recording or a recording
+  started directly in Plaud that is visible through Accessibility. This works
+  even when user_id is missing. Both commands are disabled while a start or
+  stop is in flight, and their availability refreshes whenever the menu opens.
 - **Find user_id Again** — re-scan Plaud's logs (shown only when the id is missing).
 - **Auto-record** — start recording automatically 7 s after a call begins.
 - **Auto-stop** — when a recording started automatically, stop it 10 s after
@@ -79,6 +84,10 @@ bubble offers **Stop Recording**. Everything is also in the menu-bar menu:
   recording. On by default; only ever arms for auto-started recordings.
 - **Launch at Login** — register as a login item.
 
+Manual recordings are never auto-stopped. A recording started without a call
+stays independent of later calls: they neither take ownership of it nor offer
+to stop it when they end. Stop it from the menu or in Plaud.
+
 ## How it works
 
 | Piece | Mechanism |
@@ -86,7 +95,7 @@ bubble offers **Stop Recording**. Everything is also in the menu-bar menu:
 | Detection | CoreAudio process objects (`kAudioProcessPropertyIsRunningInput`), matched by bundle-id prefix; 3 s polling fallback. |
 | Start | `plaud://record?auto=1&user_id=…` deep link; success confirmed via Plaud's log (`startRecording by scene success`), retried for cold start. |
 | Stop | Plaud's recording widget is a floating panel that `AXWindows` doesn't expose; it's located via `CGWindowList` + `AXUIElementCopyElementAtPosition` hit-test, and its stop button is clicked with a global HID `CGEvent` (Electron web content ignores `AXPress` / background clicks). Confirmed via Plaud's log. |
-| State | A single-recording "lease" bound to the owning call session; external stops (done inside Plaud) reconcile automatically. |
+| State | A single-recording "lease", with a call owner only when started during a detected call. A manual start without a call holds the same lease without an owner. External recordings are not adopted; visible ones block starts and can be stopped from the menu. External stops reconcile automatically. |
 
 Design and rationale: [`docs/superpowers/specs`](docs/superpowers/specs);
 implementation plan: [`docs/superpowers/plans`](docs/superpowers/plans).
