@@ -227,10 +227,14 @@ final class AppState: CallEventDelegate {
         plaud.performAXStop { [weak self] ok in
             // Validate the operation BEFORE touching any shared state, including
             // stopInFlight. A duplicate/late callback may belong to an old stop.
-            guard let self, self.activeStopOperation == operation,
-                  self.lease == expectedLease else { return }
+            guard let self, self.activeStopOperation == operation else { return }
             self.activeStopOperation = nil
             self.stopInFlight = false
+            guard self.lease == expectedLease else {
+                self.infoLog("AppState: stop completion ignored reason=lease changed")
+                self.pushMenu()
+                return
+            }
             if attended { self.infoLog("AppState: manual stop completed success=\(ok)") }
             if ok {
                 if rid != nil { self.releaseLease() }
