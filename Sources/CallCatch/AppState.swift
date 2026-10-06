@@ -113,7 +113,7 @@ final class AppState: CallEventDelegate {
 
     /// Запланировать авто-старт через 7 сек, если он включён и уместен.
     private func scheduleAutoRecord(_ app: WatchedApp) {
-        guard autoRecord(), commandAvailability().recordReason == nil else { return }
+        guard lease == .idle, userIdAvailable(), autoRecord() else { return }
         autoTimers[app] = scheduler(7.0) { [weak self] in
             guard let self, self.activeCalls.contains(app), self.commandAvailability().recordReason == nil,
                   self.micCurrentlyActive(app) else { return }

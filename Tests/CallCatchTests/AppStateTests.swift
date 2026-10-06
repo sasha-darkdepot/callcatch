@@ -409,6 +409,31 @@ final class AppStateTests: XCTestCase {
         }
     }
 
+    func testAutoRecordStartsWhenExternalRecordingEndsBeforeCallTimerFires() {
+        autoMode = true
+        plaud.axRecordingVisible = true
+        let s = makeState()
+        s.callStarted(app: .discord)
+        XCTAssertEqual(plaud.deepLinksSent, 0)
+        plaud.axRecordingVisible = false
+        scheduler.fireAll(delay: 7)
+        XCTAssertEqual(plaud.deepLinksSent, 1)
+    }
+
+    func testAutoRecordStartsWhenExternalStopCompletesBeforeCallTimerFires() {
+        autoMode = true
+        plaud.axRecordingVisible = true
+        plaud.axStopAsync = true
+        let s = makeState()
+        s.stopTapped()
+        s.callStarted(app: .discord)
+        XCTAssertEqual(plaud.deepLinksSent, 0)
+        plaud.axRecordingVisible = false
+        plaud.pendingStopCompletions.first?(true)
+        scheduler.fireAll(delay: 7)
+        XCTAssertEqual(plaud.deepLinksSent, 1)
+    }
+
     func testIdleRefreshUsesCurrentAXWithoutCallEvents() {
         let s = makeState()
         s.refreshMenu()
